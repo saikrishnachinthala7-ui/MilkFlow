@@ -1,6 +1,9 @@
 {
   "rewrites": [
     { "source": "/c/:customerId", "destination": "/" },
+    { "source": "/bill/:customerId", "destination": "/" },
+    { "source": "/owner", "destination": "/" },
+    { "source": "/entry", "destination": "/" },
     { "source": "/(.*)", "destination": "/" }
   ],
   "headers": [
