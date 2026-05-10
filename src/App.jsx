@@ -1127,7 +1127,7 @@ function PaymentTracking() {
 
     // Amount — look for ₹ or Rs followed by numbers
     const amtMatch = text.match(/(?:₹|rs\.?|inr)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i)
-      || text.match(/([0-9,]+(?:\.[0-9]{2})?)\s*(?:rupees|/-)/i);
+      || text.match(/([0-9,]+(?:\.[0-9]{2})?)\s*(?:rupees)/i);
     const amount = amtMatch ? parseFloat(amtMatch[1].replace(/,/g,"")) : null;
 
     // Status — success keywords
