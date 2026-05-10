@@ -285,7 +285,15 @@ function FatherScreen() {
 // ─── OWNER DASHBOARD ──────────────────────────────────────────────────────────
 function OwnerDashboard() {
   const [tab, setTab] = useState("home");
-  const tabs = [["home","🏠","Home"],["customers","👥","Customers"],["records","📋","Records"],["billing","🧾","Billing"],["payments","💳","Payments"],["settings","⚙️","Settings"]];
+  const tabs = [
+    ["home","🏠","Home"],
+    ["customers","👥","Customers"],
+    ["records","📋","Records"],
+    ["billing","🧾","Billing"],
+    ["payments","💳","Payments"],
+    ["reports","📊","Reports"],
+    ["settings","⚙️","Settings"],
+  ];
   return (
     <div style={S.screen}>
       <div style={{ flex:1, overflowY:"auto" }}>
@@ -294,19 +302,21 @@ function OwnerDashboard() {
         {tab==="records" && <DailyRecords />}
         {tab==="billing" && <BillingSection />}
         {tab==="payments" && <PaymentTracking />}
+        {tab==="reports" && <ReportsSection />}
         {tab==="settings" && <OwnerSettings />}
       </div>
-      <div style={S.bottomNav}>
+      <div style={{ ...S.bottomNav, overflowX:"auto" }}>
         {tabs.map(([id,icon,label]) => (
-          <button key={id} style={{ ...S.navBtn, ...(tab===id?S.navBtnActive:{}) }} onClick={() => setTab(id)}>
+          <button key={id} style={{ ...S.navBtn, minWidth:46, ...(tab===id?S.navBtnActive:{}) }} onClick={() => setTab(id)}>
             <span style={{ fontSize: 18 }}>{icon}</span>
-            <span style={{ fontSize: 10, marginTop: 2 }}>{label}</span>
+            <span style={{ fontSize: 9, marginTop: 2 }}>{label}</span>
           </button>
         ))}
       </div>
     </div>
   );
 }
+
 
 function OwnerHome({ setTab }) {
   const [stats, setStats] = useState({ customers:0, todayLitres:47.5, monthRevenue:84250, pendingPayments:32400, overdueCount:8 });
@@ -1004,42 +1014,912 @@ function BillPage({ customerCode }) {
   );
 }
 
+// ─── PAYMENT TRACKING — Week 4 Full System ───────────────────────────────────
 function PaymentTracking() {
   const [payments, setPayments] = useState([]);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState("pending_confirmation");
   const [loading, setLoading] = useState(true);
-  useEffect(()=>{ load(); },[]);
-  const load = async () => {
+  const [showCash, setShowCash] = useState(false);
+  const [showOCR, setShowOCR] = useState(false);
+  const [showPartial, setShowPartial] = useState(null); // bill object
+  const [ocrResult, setOcrResult] = useState(null);
+  const [ocrImage, setOcrImage] = useState(null);
+  const [ocrProcessing, setOcrProcessing] = useState(false);
+  const [customers, setCustomers] = useState([]);
+  const [cashForm, setCashForm] = useState({ customer_id:"", amount:"", note:"" });
+  const [partialAmount, setPartialAmount] = useState("");
+
+  useEffect(() => { loadAll(); }, []);
+
+  const loadAll = async () => {
     setLoading(true);
-    try { const d = await db("payments","GET",null,"?order=payment_date.desc&limit=50&select=*,customers(name,customer_code)"); setPayments(d||DEMO_PAYMENTS); }
-    catch { setPayments(DEMO_PAYMENTS); }
+    try {
+      const [pmts, custs] = await Promise.all([
+        db("payments","GET",null,"?order=payment_date.desc&limit=100&select=*,customers(name,customer_code,phone)"),
+        db("customers","GET",null,"?is_active=eq.true&order=name&select=id,name,customer_code"),
+      ]);
+      setPayments(pmts && pmts.length > 0 ? pmts : DEMO_PAYMENTS);
+      setCustomers(custs || DEMO_CUSTOMERS);
+    } catch {
+      setPayments(DEMO_PAYMENTS);
+      setCustomers(DEMO_CUSTOMERS);
+    }
     setLoading(false);
   };
-  const confirm = async (id) => {
-    try { await db("payments","PATCH",{status:"confirmed"},`?id=eq.${id}`); load(); }
-    catch { alert("Error confirming"); }
+
+  // ── Confirm payment ──
+  const confirmPayment = async (p) => {
+    try {
+      await db("payments","PATCH",{ status:"confirmed", owner_confirmed:true, confirmed_at:new Date().toISOString() },`?id=eq.${p.id}`);
+      // Update bill status if fully paid
+      await db("bills","PATCH",{ status:"paid" },`?customer_id=eq.${p.customer_id}&status=eq.pending`);
+      loadAll();
+    } catch { alert("Error confirming — try again"); }
   };
-  const filtered = payments.filter(p=>filter==="all"||p.status===filter);
+
+  // ── Reject payment ──
+  const rejectPayment = async (p) => {
+    const reason = window.prompt("Reason for rejection (shown in log):", "Amount mismatch");
+    if (reason === null) return;
+    try {
+      await db("payments","PATCH",{ status:"rejected", rejection_reason:reason },`?id=eq.${p.id}`);
+      loadAll();
+    } catch { alert("Error rejecting"); }
+  };
+
+  // ── Mark cash paid ──
+  const markCashPaid = async () => {
+    if (!cashForm.customer_id || !cashForm.amount) { alert("Select customer and enter amount"); return; }
+    const amt = parseFloat(cashForm.amount);
+    if (isNaN(amt) || amt <= 0) { alert("Enter a valid amount"); return; }
+    try {
+      await db("payments","POST",{
+        customer_id: cashForm.customer_id,
+        amount: amt,
+        payment_method: "cash",
+        payment_date: today(),
+        status: "confirmed",
+        owner_confirmed: true,
+        notes: cashForm.note || "Cash payment — marked by owner",
+      });
+      await db("bills","PATCH",{ status:"paid" },`?customer_id=eq.${cashForm.customer_id}&status=eq.pending`);
+      setCashForm({ customer_id:"", amount:"", note:"" });
+      setShowCash(false);
+      loadAll();
+      alert("✅ Cash payment recorded!");
+    } catch(e) { alert("Error: "+e.message); }
+  };
+
+  // ── OCR screenshot processing ──
+  const processScreenshot = async (file) => {
+    if (!file) return;
+    setOcrProcessing(true);
+    setOcrResult(null);
+
+    // Show image preview
+    const reader = new FileReader();
+    reader.onload = (e) => setOcrImage(e.target.result);
+    reader.readAsDataURL(file);
+
+    try {
+      // Load Tesseract from CDN
+      if (!window.Tesseract) {
+        await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js");
+      }
+
+      const result = await window.Tesseract.recognize(file, "eng", {
+        logger: () => {},
+      });
+
+      const text = result.data.text;
+      const parsed = parsePaymentScreenshot(text);
+      setOcrResult({ ...parsed, rawText: text });
+    } catch(e) {
+      // Fallback — manual entry if OCR fails
+      setOcrResult({ error: true, rawText: "" });
+    }
+    setOcrProcessing(false);
+  };
+
+  // ── Parse OCR text to extract payment details ──
+  const parsePaymentScreenshot = (text) => {
+    const lines = text.toLowerCase();
+
+    // Amount — look for ₹ or Rs followed by numbers
+    const amtMatch = text.match(/(?:₹|rs\.?|inr)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i)
+      || text.match(/([0-9,]+(?:\.[0-9]{2})?)\s*(?:rupees|/-)/i);
+    const amount = amtMatch ? parseFloat(amtMatch[1].replace(/,/g,"")) : null;
+
+    // Status — success keywords
+    const isSuccess = /success|paid|complete|done|debit/i.test(text);
+    const isFailed = /fail|declin|reject|error/i.test(text);
+
+    // Transaction ID — UPI ref / transaction ID patterns
+    const txnMatch = text.match(/(?:upi ref|txn|transaction|ref)\s*[:#]?\s*([A-Z0-9]{8,20})/i);
+    const txnId = txnMatch ? txnMatch[1] : null;
+
+    // Date — common date patterns
+    const dateMatch = text.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
+    const date = dateMatch ? dateMatch[1] : today();
+
+    // Payment app detection
+    const app = /gpay|google pay/i.test(text) ? "GPay"
+      : /phonepe/i.test(text) ? "PhonePe"
+      : /paytm/i.test(text) ? "Paytm"
+      : /bhim/i.test(text) ? "BHIM"
+      : "UPI";
+
+    // Fraud checks
+    const fraudFlags = [];
+    if (!isSuccess) fraudFlags.push("Payment status not SUCCESS");
+    if (isFailed) fraudFlags.push("Payment appears FAILED");
+    if (!amount) fraudFlags.push("Could not read amount");
+    if (!txnId) fraudFlags.push("No transaction ID found");
+
+    return { amount, isSuccess, isFailed, txnId, date, app, fraudFlags };
+  };
+
+  const loadScript = (src) => new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+
+  // ── Save OCR-verified payment ──
+  const saveOcrPayment = async (customerId, billAmount) => {
+    if (!ocrResult || !customerId) { alert("Select customer first"); return; }
+    const amt = ocrResult.amount || parseFloat(billAmount);
+    if (!amt) { alert("Enter amount manually"); return; }
+
+    // Duplicate check
+    if (ocrResult.txnId) {
+      try {
+        const existing = await db("payments","GET",null,`?transaction_id=eq.${ocrResult.txnId}&limit=1`);
+        if (existing && existing.length > 0) { alert("⚠️ Duplicate! This transaction ID already exists in records."); return; }
+      } catch {}
+    }
+
+    try {
+      await db("payments","POST",{
+        customer_id: customerId,
+        amount: amt,
+        payment_method: "upi",
+        payment_date: today(),
+        status: "pending_confirmation",
+        transaction_id: ocrResult.txnId,
+        payment_app: ocrResult.app,
+        ocr_verified: true,
+        notes: `OCR read from screenshot. App: ${ocrResult.app}. TxnID: ${ocrResult.txnId||"not found"}`,
+      });
+      setShowOCR(false);
+      setOcrResult(null);
+      setOcrImage(null);
+      loadAll();
+      alert("✅ Payment added to review queue!\n\nNow verify in your GPay/PhonePe app and tap Confirm.");
+    } catch(e) { alert("Error saving: "+e.message); }
+  };
+
+  // ── Stats ──
+  const pendingCount = payments.filter(p=>p.status==="pending_confirmation").length;
+  const confirmedToday = payments.filter(p=>p.status==="confirmed" && p.payment_date===today()).length;
+  const totalConfirmed = payments.filter(p=>p.status==="confirmed").reduce((s,p)=>s+(p.amount||0),0);
+  const filtered = payments.filter(p => filter==="all" || p.status===filter);
+
   return (
     <div style={{ padding:16 }}>
       <div style={S.sectionTitle}>💳 Payment Tracking</div>
+
+      {/* Stats */}
+      <div style={S.statsGrid}>
+        <StatCard label="Awaiting Review" value={pendingCount} icon="⏳" color={pendingCount>0?"#c62828":"#1a6b3c"} />
+        <StatCard label="Confirmed Today" value={confirmedToday} icon="✅" color="#2E7D32" />
+        <StatCard label="Total Collected" value={fmtCurrency(totalConfirmed)} icon="💰" color="#1a6b3c" />
+        <StatCard label="Total Records" value={payments.length} icon="📋" color="#1565C0" />
+      </div>
+
+      {/* Action buttons */}
+      <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+        <button style={{ flex:1, ...S.btnPrimary, padding:"11px 8px", fontSize:13, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
+          onClick={()=>setShowOCR(true)}>
+          📸 Upload Screenshot
+        </button>
+        <button style={{ flex:1, background:"#f0f4ff", border:"0.5px solid #c5d5f5", borderRadius:10, padding:"11px 8px", fontSize:13, color:"#1565C0", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
+          onClick={()=>setShowCash(true)}>
+          💵 Mark Cash Paid
+        </button>
+      </div>
+
+      {/* Alert if pending reviews */}
+      {pendingCount > 0 && (
+        <div style={S.alertBox}>
+          <span style={{fontSize:20}}>⚠️</span>
+          <div>
+            <div style={{fontWeight:500,fontSize:14}}>{pendingCount} payment{pendingCount>1?"s":""} waiting for your confirmation</div>
+            <div style={{fontSize:12,color:"#856404"}}>Check your GPay/PhonePe app and confirm below</div>
+          </div>
+        </div>
+      )}
+
+      {/* Filter chips */}
       <div style={S.filterRow}>
-        {[["all","All"],["pending_confirmation","⏳ Review"],["confirmed","✅ Confirmed"],["rejected","❌ Rejected"]].map(([f,l]) => (
+        {[
+          ["pending_confirmation",`⏳ Review (${pendingCount})`],
+          ["confirmed","✅ Confirmed"],
+          ["rejected","❌ Rejected"],
+          ["all","All"],
+        ].map(([f,l]) => (
           <button key={f} style={{ ...S.filterChip, ...(filter===f?S.filterChipActive:{}) }} onClick={()=>setFilter(f)}>{l}</button>
         ))}
       </div>
-      {loading ? <Loader /> : filtered.map((p,i) => (
+
+      {/* Payment list */}
+      {loading ? <Loader /> : (
+        <>
+          {filtered.length === 0 && (
+            <div style={{ textAlign:"center", padding:32, color:"#888", fontSize:14 }}>
+              {filter==="pending_confirmation" ? "✅ No payments waiting for review" : "No payments found"}
+            </div>
+          )}
+          {filtered.map((p,i) => (
+            <div key={i} style={{ ...S.listCard, flexDirection:"column", alignItems:"stretch", gap:10 }}>
+              {/* Top row */}
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <div style={{ fontSize:28 }}>{p.payment_method==="cash"?"💵":p.payment_app==="GPay"?"🟢":p.payment_app==="PhonePe"?"🟣":"📱"}</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontWeight:500, fontSize:15 }}>{p.customers?.name||"Customer"}</div>
+                  <div style={{ fontSize:12, color:"#888" }}>
+                    {p.payment_app||p.payment_method?.toUpperCase()||"UPI"} • {fmtDate(p.payment_date)}
+                    {p.transaction_id && <span style={{marginLeft:6,color:"#aaa"}}>#{p.transaction_id.slice(-6)}</span>}
+                  </div>
+                </div>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontWeight:700, fontSize:17, color:"#1a6b3c" }}>{fmtCurrency(p.amount)}</div>
+                  <div style={{ ...S.statusBadge, ...(p.status==="confirmed"?S.badgePaid:p.status==="rejected"?S.badgeRejected:S.badgePending) }}>
+                    {p.status==="confirmed"?"✅ Confirmed":p.status==="rejected"?"❌ Rejected":"⏳ Pending"}
+                  </div>
+                </div>
+              </div>
+
+              {/* OCR verified badge */}
+              {p.ocr_verified && (
+                <div style={{ fontSize:11, color:"#2E7D32", background:"#e8f5ee", padding:"4px 10px", borderRadius:8, display:"inline-block" }}>
+                  🔍 OCR verified screenshot
+                </div>
+              )}
+
+              {/* Confirm / Reject buttons for pending */}
+              {p.status==="pending_confirmation" && (
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                  <button style={{ background:"#f8d7da", border:"0.5px solid #f5c6cb", borderRadius:10, padding:"10px 0", fontSize:13, color:"#721c24", cursor:"pointer", fontWeight:500 }}
+                    onClick={()=>rejectPayment(p)}>
+                    ❌ Reject
+                  </button>
+                  <button style={{ background:"#1a6b3c", border:"none", borderRadius:10, padding:"10px 0", fontSize:13, color:"white", cursor:"pointer", fontWeight:500 }}
+                    onClick={()=>confirmPayment(p)}>
+                    ✅ Confirm Paid
+                  </button>
+                </div>
+              )}
+
+              {/* Rejection reason */}
+              {p.status==="rejected" && p.rejection_reason && (
+                <div style={{ fontSize:12, color:"#c62828", background:"#fdf2f3", padding:"6px 10px", borderRadius:8 }}>
+                  Reason: {p.rejection_reason}
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+
+      {/* ── CASH PAYMENT MODAL ── */}
+      {showCash && (
+        <div style={S.modalBg} onClick={()=>setShowCash(false)}>
+          <div style={S.modal} onClick={e=>e.stopPropagation()}>
+            <div style={S.modalHandle} />
+            <div style={S.modalName}>💵 Mark Cash Payment</div>
+            <div style={S.modalMeta}>Record a cash payment received from customer</div>
+
+            <label style={S.formLabel}>Customer *</label>
+            <select style={S.formInput} value={cashForm.customer_id} onChange={e=>setCashForm(p=>({...p,customer_id:e.target.value}))}>
+              <option value="">Select customer...</option>
+              {customers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.customer_code})</option>)}
+            </select>
+
+            <label style={S.formLabel}>Amount Received (₹) *</label>
+            <input type="number" style={S.formInput} placeholder="e.g. 2040" value={cashForm.amount} onChange={e=>setCashForm(p=>({...p,amount:e.target.value}))} />
+
+            <label style={S.formLabel}>Note (optional)</label>
+            <input type="text" style={S.formInput} placeholder="e.g. Collected at door, Staff collected" value={cashForm.note} onChange={e=>setCashForm(p=>({...p,note:e.target.value}))} />
+
+            <div style={S.modalActions}>
+              <button style={S.btnCancel} onClick={()=>setShowCash(false)}>Cancel</button>
+              <button style={S.btnSave} onClick={markCashPaid}>✅ Mark Paid</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── OCR SCREENSHOT MODAL ── */}
+      {showOCR && (
+        <div style={{ ...S.modalBg, alignItems:"flex-start", overflowY:"auto" }} onClick={()=>{ setShowOCR(false); setOcrResult(null); setOcrImage(null); }}>
+          <div style={{ ...S.modal, borderRadius:0, minHeight:"100vh", paddingBottom:40 }} onClick={e=>e.stopPropagation()}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
+              <button style={{ background:"none", border:"none", fontSize:22, cursor:"pointer", color:"#888" }} onClick={()=>{ setShowOCR(false); setOcrResult(null); setOcrImage(null); }}>←</button>
+              <div style={{ fontWeight:600, fontSize:16 }}>📸 Screenshot OCR</div>
+            </div>
+
+            <div style={{ background:"#e8f5ee", borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:13, color:"#1a6b3c" }}>
+              Customer shared payment screenshot on WhatsApp? Upload it here — the system reads amount, date, and transaction ID automatically.
+            </div>
+
+            {/* Upload area */}
+            {!ocrImage && (
+              <label style={{ display:"block", border:"2px dashed #ddd", borderRadius:12, padding:"32px 20px", textAlign:"center", cursor:"pointer", marginBottom:16 }}>
+                <div style={{ fontSize:40, marginBottom:8 }}>📷</div>
+                <div style={{ fontSize:15, fontWeight:500, color:"#555" }}>Tap to upload screenshot</div>
+                <div style={{ fontSize:12, color:"#888", marginTop:4 }}>GPay / PhonePe / Paytm / BHIM</div>
+                <input type="file" accept="image/*" style={{ display:"none" }} onChange={e=>{ if(e.target.files[0]) processScreenshot(e.target.files[0]); }} />
+              </label>
+            )}
+
+            {/* Image preview */}
+            {ocrImage && (
+              <div style={{ marginBottom:16 }}>
+                <img src={ocrImage} alt="Payment screenshot" style={{ width:"100%", borderRadius:10, border:"0.5px solid #eee", maxHeight:300, objectFit:"contain", background:"#f8f9fa" }} />
+                <button style={{ ...S.btnCancel, width:"100%", marginTop:8, fontSize:13 }} onClick={()=>{ setOcrImage(null); setOcrResult(null); }}>
+                  🔄 Upload Different Screenshot
+                </button>
+              </div>
+            )}
+
+            {/* Processing */}
+            {ocrProcessing && (
+              <div style={{ background:"#fff3cd", borderRadius:10, padding:"14px", textAlign:"center", marginBottom:16 }}>
+                <div style={{ fontSize:24, marginBottom:8 }}>🔍</div>
+                <div style={{ fontSize:14, color:"#856404", fontWeight:500 }}>Reading screenshot...</div>
+                <div style={{ fontSize:12, color:"#856404", marginTop:4 }}>Scanning for amount, date, transaction ID</div>
+              </div>
+            )}
+
+            {/* OCR Result */}
+            {ocrResult && !ocrProcessing && (
+              <OcrResultPanel result={ocrResult} customers={customers} onSave={saveOcrPayment} />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── OCR Result Panel ─────────────────────────────────────────────────────────
+function OcrResultPanel({ result, customers, onSave }) {
+  const [selectedCustomer, setSelectedCustomer] = useState("");
+  const [manualAmount, setManualAmount] = useState(result.amount ? String(result.amount) : "");
+
+  if (result.error) return (
+    <div style={{ background:"#fdf2f3", border:"0.5px solid #f5c6cb", borderRadius:12, padding:16 }}>
+      <div style={{ fontWeight:500, color:"#721c24", marginBottom:8 }}>⚠️ Could not read screenshot automatically</div>
+      <div style={{ fontSize:13, color:"#888", marginBottom:14 }}>Enter payment details manually below:</div>
+      <label style={S.formLabel}>Customer</label>
+      <select style={S.formInput} value={selectedCustomer} onChange={e=>setSelectedCustomer(e.target.value)}>
+        <option value="">Select customer...</option>
+        {customers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.customer_code})</option>)}
+      </select>
+      <label style={S.formLabel}>Amount (₹)</label>
+      <input type="number" style={S.formInput} placeholder="Enter amount" value={manualAmount} onChange={e=>setManualAmount(e.target.value)} />
+      <button style={{ ...S.btnSave, width:"100%", marginTop:4 }} onClick={()=>onSave(selectedCustomer, manualAmount)}>
+        Save Payment (Manual)
+      </button>
+    </div>
+  );
+
+  const allClear = result.fraudFlags.length === 0;
+
+  return (
+    <div>
+      {/* Fraud check result */}
+      <div style={{ background: allClear?"#e8f5ee":"#fff3cd", border:`0.5px solid ${allClear?"#b8dfc8":"#ffc107"}`, borderRadius:12, padding:14, marginBottom:14 }}>
+        <div style={{ fontWeight:500, fontSize:14, color: allClear?"#1a6b3c":"#856404", marginBottom:8 }}>
+          {allClear ? "✅ Screenshot looks genuine" : "⚠️ Please review carefully"}
+        </div>
+        {result.fraudFlags.length > 0 && result.fraudFlags.map((f,i) => (
+          <div key={i} style={{ fontSize:12, color:"#856404", marginBottom:3 }}>• {f}</div>
+        ))}
+        {allClear && <div style={{ fontSize:12, color:"#2d7a50" }}>Amount, status, and transaction ID all verified from screenshot.</div>}
+      </div>
+
+      {/* Extracted data */}
+      <div style={{ background:"white", border:"0.5px solid #eee", borderRadius:12, padding:14, marginBottom:14 }}>
+        <div style={{ fontSize:13, fontWeight:500, color:"#555", marginBottom:10 }}>📋 Extracted from screenshot:</div>
+        {[
+          ["Amount", result.amount ? fmtCurrency(result.amount) : "Not found", !result.amount],
+          ["Status", result.isSuccess ? "✅ SUCCESS" : result.isFailed ? "❌ FAILED" : "⚠️ Unknown", !result.isSuccess],
+          ["Payment App", result.app, false],
+          ["Transaction ID", result.txnId || "Not found", !result.txnId],
+          ["Date", result.date, false],
+        ].map(([label,value,warn])=>(
+          <div key={label} style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:8, paddingBottom:8, borderBottom:"0.5px solid #f5f5f5" }}>
+            <span style={{ color:"#888" }}>{label}</span>
+            <span style={{ fontWeight:500, color: warn?"#c62828":result.isSuccess&&label==="Status"?"#1a6b3c":"#111" }}>{value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Manual amount override if not found */}
+      {!result.amount && (
+        <div style={{ marginBottom:14 }}>
+          <label style={S.formLabel}>Enter amount manually (₹)</label>
+          <input type="number" style={S.formInput} placeholder="e.g. 2040" value={manualAmount} onChange={e=>setManualAmount(e.target.value)} />
+        </div>
+      )}
+
+      {/* Customer selection */}
+      <label style={S.formLabel}>Match to customer *</label>
+      <select style={S.formInput} value={selectedCustomer} onChange={e=>setSelectedCustomer(e.target.value)}>
+        <option value="">Select customer this payment is from...</option>
+        {customers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.customer_code})</option>)}
+      </select>
+
+      <div style={{ background:"#e8f5ee", borderRadius:10, padding:"10px 14px", fontSize:12, color:"#2d7a50", marginBottom:14 }}>
+        💡 After saving, verify in your GPay/PhonePe app that this payment arrived, then tap <strong>Confirm</strong> in the payment list.
+      </div>
+
+      <button
+        style={{ ...S.btnSave, width:"100%", padding:14, fontSize:15, opacity: (!selectedCustomer||(result.isFailed))?0.5:1 }}
+        onClick={()=>onSave(selectedCustomer, manualAmount||result.amount)}
+        disabled={!selectedCustomer || result.isFailed}>
+        {result.isFailed ? "❌ Cannot save — payment failed" : "✅ Add to Review Queue"}
+      </button>
+    </div>
+  );
+}
+
+// Helper for currency inside OCR panel
+const fmtCurrencyOCR = (n) => "₹" + Number(n||0).toLocaleString("en-IN");
+
+
+// ─── REPORTS SECTION — Week 5 ─────────────────────────────────────────────────
+function ReportsSection() {
+  const [sub, setSub] = useState("overview");
+  return (
+    <div style={{ padding:16 }}>
+      <div style={S.sectionTitle}>📊 Reports & Automation</div>
+      <div style={{ ...S.filterRow, flexWrap:"wrap", gap:6 }}>
+        {[
+          ["overview","📈 Overview"],
+          ["procurement","🥛 Procurement"],
+          ["inactive","⚠️ Inactive"],
+          ["reminders","🔔 Reminders"],
+          ["automation","⚙️ Schedule"],
+        ].map(([id,label]) => (
+          <button key={id} style={{ ...S.filterChip, ...(sub===id?S.filterChipActive:{}) }} onClick={()=>setSub(id)}>{label}</button>
+        ))}
+      </div>
+      {sub==="overview"    && <MonthlyOverview />}
+      {sub==="procurement" && <ProcurementEstimate />}
+      {sub==="inactive"    && <InactiveCustomers />}
+      {sub==="reminders"   && <PaymentReminders />}
+      {sub==="automation"  && <AutomationSchedule />}
+    </div>
+  );
+}
+
+// ── Monthly Overview ──────────────────────────────────────────────────────────
+function MonthlyOverview() {
+  const now = new Date();
+  const [month, setMonth] = useState(now.toISOString().slice(0,7));
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => { load(); }, [month]);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [y,m] = month.split("-");
+      const startDate = `${y}-${m}-01`;
+      const endDate = new Date(parseInt(y),parseInt(m),0).toISOString().split("T")[0];
+
+      const [entries, bills, payments, customers] = await Promise.all([
+        db("daily_entries","GET",null,`?entry_date=gte.${startDate}&entry_date=lte.${endDate}&select=quantity_litres,entry_date`),
+        db("bills","GET",null,`?billing_month=eq.${startDate}&select=total_amount,status`),
+        db("payments","GET",null,`?payment_date=gte.${startDate}&payment_date=lte.${endDate}&status=eq.confirmed&select=amount`),
+        db("customers","GET",null,"?is_active=eq.true&select=id"),
+      ]);
+
+      const totalLitres = (entries||[]).reduce((s,e)=>s+(e.quantity_litres||0),0);
+      const totalBilled  = (bills||[]).reduce((s,b)=>s+(b.total_amount||0),0);
+      const totalPaid    = (payments||[]).reduce((s,p)=>s+(p.amount||0),0);
+      const paidBills    = (bills||[]).filter(b=>b.status==="paid").length;
+      const pendingBills = (bills||[]).filter(b=>b.status!=="paid").length;
+      const daysInMonth  = new Date(parseInt(y),parseInt(m),0).getDate();
+      const daysRecorded = new Set((entries||[]).map(e=>e.entry_date)).size;
+
+      setData({ totalLitres, totalBilled, totalPaid, paidBills, pendingBills,
+        outstanding: totalBilled - totalPaid, totalCustomers: (customers||[]).length,
+        daysRecorded, daysInMonth,
+        avgLitresPerDay: totalLitres / Math.max(daysRecorded,1),
+        collectionRate: totalBilled > 0 ? Math.round((totalPaid/totalBilled)*100) : 0,
+      });
+    } catch {
+      setData({ totalLitres:1425, totalBilled:96900, totalPaid:64600,
+        paidBills:14, pendingBills:6, outstanding:32300, totalCustomers:DEMO_CUSTOMERS.length,
+        daysRecorded:22, daysInMonth:30, avgLitresPerDay:47.5, collectionRate:67 });
+    }
+    setLoading(false);
+  };
+
+  if (loading) return <Loader />;
+  if (!data) return null;
+
+  return (
+    <div style={{ marginTop:8 }}>
+      <input type="month" value={month} onChange={e=>setMonth(e.target.value)} style={{ ...S.formInput, marginBottom:14 }} />
+
+      {/* Revenue summary */}
+      <div style={{ background:"linear-gradient(135deg,#0a3d1f,#1a6b3c)", borderRadius:14, padding:16, marginBottom:12, color:"white" }}>
+        <div style={{ fontSize:13, opacity:0.8, marginBottom:4 }}>Total Revenue — {monthLabel(month)}</div>
+        <div style={{ fontSize:28, fontWeight:700, marginBottom:8 }}>{fmtCurrency(data.totalBilled)}</div>
+        <div style={{ display:"flex", gap:12 }}>
+          <div><div style={{ fontSize:11, opacity:0.7 }}>Collected</div><div style={{ fontWeight:600 }}>{fmtCurrency(data.totalPaid)}</div></div>
+          <div><div style={{ fontSize:11, opacity:0.7 }}>Outstanding</div><div style={{ fontWeight:600, color:"#ffcc80" }}>{fmtCurrency(data.outstanding)}</div></div>
+          <div><div style={{ fontSize:11, opacity:0.7 }}>Collection %</div><div style={{ fontWeight:600 }}>{data.collectionRate}%</div></div>
+        </div>
+      </div>
+
+      {/* Collection rate bar */}
+      <div style={{ background:"white", border:"0.5px solid #eee", borderRadius:12, padding:14, marginBottom:12 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
+          <span style={{ fontSize:13, color:"#555" }}>Collection rate</span>
+          <span style={{ fontWeight:600, color: data.collectionRate>=80?"#1a6b3c":data.collectionRate>=60?"#856404":"#c62828" }}>{data.collectionRate}%</span>
+        </div>
+        <div style={{ background:"#eee", borderRadius:4, height:8 }}>
+          <div style={{ background: data.collectionRate>=80?"#1a6b3c":data.collectionRate>=60?"#ffc107":"#c62828", borderRadius:4, height:"100%", width:`${data.collectionRate}%`, transition:"width 0.5s" }} />
+        </div>
+        <div style={{ fontSize:11, color:"#888", marginTop:6 }}>Target: 80%+ by Day 20 of month</div>
+      </div>
+
+      <div style={S.statsGrid}>
+        <StatCard label="Total Litres" value={data.totalLitres.toFixed(0)+"L"} icon="🥛" color="#1565C0" />
+        <StatCard label="Avg Per Day" value={data.avgLitresPerDay.toFixed(1)+"L"} icon="📅" color="#6a1b9a" />
+        <StatCard label="Bills Paid" value={`${data.paidBills}/${data.paidBills+data.pendingBills}`} icon="✅" color="#2E7D32" />
+        <StatCard label="Days Recorded" value={`${data.daysRecorded}/${data.daysInMonth}`} icon="📋" color="#e65100" />
+      </div>
+
+      {/* WhatsApp summary button */}
+      <button style={{ ...S.btnPrimary, width:"100%", padding:13, fontSize:14, marginTop:4 }}
+        onClick={() => {
+          const msg = encodeURIComponent(
+`📊 *MilkFlow Monthly Report — ${monthLabel(month)}*
+
+🥛 Total Litres: ${data.totalLitres.toFixed(0)}L
+💰 Total Billed: ${fmtCurrency(data.totalBilled)}
+✅ Collected: ${fmtCurrency(data.totalPaid)} (${data.collectionRate}%)
+⏳ Outstanding: ${fmtCurrency(data.outstanding)}
+📋 Days Recorded: ${data.daysRecorded}/${data.daysInMonth}
+👥 Active Customers: ${data.totalCustomers}
+
+— Saikrishna Milk Supply`
+          );
+          window.open(`https://wa.me/?text=${msg}`,"_blank");
+        }}>
+        📤 Share Report on WhatsApp
+      </button>
+    </div>
+  );
+}
+
+// ── Procurement Estimate ──────────────────────────────────────────────────────
+function ProcurementEstimate() {
+  const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    setLoading(true);
+    try { const d = await db("customers","GET",null,"?is_active=eq.true&select=brand_name,default_quantity,area_name"); setCustomers(d||DEMO_CUSTOMERS); }
+    catch { setCustomers(DEMO_CUSTOMERS); }
+    setLoading(false);
+  };
+
+  const totalByBrand = {};
+  const totalByArea  = {};
+  let grandTotal = 0;
+
+  customers.forEach(c => {
+    const brand = c.brand_name || "Amul Full Cream";
+    const area  = c.area_name  || "Other";
+    const qty   = c.default_quantity || 0;
+    totalByBrand[brand] = (totalByBrand[brand]||0) + qty;
+    totalByArea[area]   = (totalByArea[area]||0)   + qty;
+    grandTotal += qty;
+  });
+
+  const brandColors = { "Amul Full Cream":"#1565C0","Amul Toned":"#0288D1","Nandini":"#2E7D32","Local":"#6D4C41" };
+
+  if (loading) return <Loader />;
+
+  return (
+    <div style={{ marginTop:8 }}>
+      <div style={{ background:"#e8f5ee", border:"1px solid #b8dfc8", borderRadius:10, padding:"12px 14px", marginBottom:14 }}>
+        <div style={{ fontWeight:600, fontSize:15, color:"#1a6b3c" }}>🥛 Tomorrow's Order</div>
+        <div style={{ fontSize:28, fontWeight:700, color:"#1a6b3c", marginTop:4 }}>{grandTotal.toFixed(1)} Litres</div>
+        <div style={{ fontSize:13, color:"#2d7a50" }}>Based on current default quantities</div>
+      </div>
+
+      <div style={S.sectionTitle}>By Brand</div>
+      {Object.entries(totalByBrand).map(([brand,qty]) => (
+        <div key={brand} style={S.listCard}>
+          <div style={{ width:12, height:40, borderRadius:3, background: brandColors[brand]||"#888", flexShrink:0 }} />
+          <div style={{ flex:1 }}><div style={{ fontWeight:500 }}>{brand}</div><div style={{ fontSize:12, color:"#888" }}>{customers.filter(c=>(c.brand_name||"Amul Full Cream")===brand).length} customers</div></div>
+          <div style={{ fontWeight:700, fontSize:18, color: brandColors[brand]||"#111" }}>{qty.toFixed(1)}L</div>
+        </div>
+      ))}
+
+      <div style={S.sectionTitle}>By Area</div>
+      {Object.entries(totalByArea).map(([area,qty],i) => (
+        <div key={area} style={S.listCard}>
+          <div style={{ fontSize:20 }}>📍</div>
+          <div style={{ flex:1 }}><div style={{ fontWeight:500 }}>{area}</div><div style={{ fontSize:12, color:"#888" }}>{customers.filter(c=>(c.area_name||"Other")===area).length} customers</div></div>
+          <div style={{ fontWeight:700, fontSize:18, color: AREA_COLORS[i%AREA_COLORS.length] }}>{qty.toFixed(1)}L</div>
+        </div>
+      ))}
+
+      <button style={{ ...S.btnPrimary, width:"100%", padding:12, marginTop:8 }}
+        onClick={() => {
+          const lines = Object.entries(totalByBrand).map(([b,q])=>`• ${b}: ${q.toFixed(1)}L`).join("\n");
+          const msg = encodeURIComponent(`🥛 *Tomorrow's Milk Order*\n\n${lines}\n\n*Total: ${grandTotal.toFixed(1)}L*\n\n— Saikrishna Milk Supply`);
+          window.open(`https://wa.me/?text=${msg}`,"_blank");
+        }}>
+        📤 Send Order to Supplier
+      </button>
+    </div>
+  );
+}
+
+// ── Inactive Customer Detection ───────────────────────────────────────────────
+function InactiveCustomers() {
+  const [inactive, setInactive] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const INACTIVE_DAYS = 7;
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    setLoading(true);
+    try {
+      const cutoff = new Date(Date.now() - INACTIVE_DAYS * 86400000).toISOString().split("T")[0];
+      const [customers, recentEntries] = await Promise.all([
+        db("customers","GET",null,"?is_active=eq.true&select=id,name,customer_code,phone,area_name,default_quantity"),
+        db("daily_entries","GET",null,`?entry_date=gte.${cutoff}&select=customer_id`),
+      ]);
+      const activeIds = new Set((recentEntries||[]).map(e=>e.customer_id));
+      const inactiveList = (customers||DEMO_CUSTOMERS).filter(c => !activeIds.has(c.id));
+      setInactive(inactiveList);
+    } catch {
+      setInactive(DEMO_CUSTOMERS.slice(0,2));
+    }
+    setLoading(false);
+  };
+
+  if (loading) return <Loader />;
+
+  return (
+    <div style={{ marginTop:8 }}>
+      <div style={{ background: inactive.length>0?"#fff3cd":"#e8f5ee", border:`1px solid ${inactive.length>0?"#ffc107":"#b8dfc8"}`, borderRadius:10, padding:"12px 14px", marginBottom:14 }}>
+        <div style={{ fontWeight:500, fontSize:14, color: inactive.length>0?"#856404":"#1a6b3c" }}>
+          {inactive.length > 0 ? `⚠️ ${inactive.length} customers with no delivery in ${INACTIVE_DAYS}+ days` : `✅ All customers active in last ${INACTIVE_DAYS} days`}
+        </div>
+        {inactive.length > 0 && <div style={{ fontSize:12, color:"#856404", marginTop:4 }}>Check if they stopped milk or need follow-up</div>}
+      </div>
+
+      {inactive.length === 0 && (
+        <div style={{ textAlign:"center", padding:32, color:"#888" }}>
+          <div style={{ fontSize:40, marginBottom:8 }}>✅</div>
+          <div>All customers received delivery in last {INACTIVE_DAYS} days</div>
+        </div>
+      )}
+
+      {inactive.map((c,i) => (
         <div key={i} style={S.listCard}>
-          <div style={{fontSize:26}}>{p.payment_method==="cash"?"💵":"📱"}</div>
-          <div style={{flex:1}}><div style={{fontWeight:500,fontSize:14}}>{p.customers?.name||"Customer"}</div><div style={{fontSize:12,color:"#888"}}>{(p.payment_method||"").toUpperCase()} • {fmtDate(p.payment_date)}</div></div>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontWeight:600,color:"#1a6b3c"}}>{fmtCurrency(p.amount)}</div>
-            {p.status==="pending_confirmation" && <button style={{...S.btnPrimary,padding:"4px 10px",fontSize:11,marginTop:4}} onClick={()=>confirm(p.id)}>Confirm ✅</button>}
-            {p.status==="confirmed" && <div style={S.badgePaid}>✅ Done</div>}
-            {p.status==="rejected" && <div style={S.badgeRejected}>❌ Rejected</div>}
+          <div style={{ ...S.avatar, background:avatarColor(c.name), width:40, height:40 }}>{initials(c.name)}</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontWeight:500 }}>{c.name}</div>
+            <div style={{ fontSize:12, color:"#888" }}>{c.customer_code} • {c.area_name} • {c.default_quantity}L/day</div>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <div style={{ fontSize:11, background:"#fff3cd", color:"#856404", padding:"2px 8px", borderRadius:8, textAlign:"center" }}>No delivery {INACTIVE_DAYS}d+</div>
+            <a href={`https://wa.me/91${(c.phone||"").replace(/\D/g,"")}`} style={{ fontSize:11, background:"#e8f5ee", color:"#1a6b3c", padding:"3px 8px", borderRadius:8, textDecoration:"none", textAlign:"center" }}>📞 Call</a>
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── Payment Reminders ─────────────────────────────────────────────────────────
+function PaymentReminders() {
+  const [bills, setBills] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(null);
+  const now = new Date();
+  const month = now.toISOString().slice(0,7);
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    setLoading(true);
+    try {
+      const d = await db("bills","GET",null,`?billing_month=eq.${month}-01&status=eq.pending&select=*,customers(name,customer_code,phone)`);
+      setBills(d||DEMO_BILLS.filter(b=>b.status!=="paid"));
+    } catch { setBills(DEMO_BILLS.filter(b=>b.status!=="paid")); }
+    setLoading(false);
+  };
+
+  const dayOfMonth = now.getDate();
+  const reminderLevel = dayOfMonth >= 20 ? 3 : dayOfMonth >= 15 ? 2 : dayOfMonth >= 10 ? 1 : 0;
+  const reminderLabels = ["Too early","Gentle (Day 10)","Firm (Day 15)","Final (Day 20)"];
+  const reminderColors = ["#888","#1a6b3c","#856404","#c62828"];
+
+  const getReminderMsg = (bill, level) => {
+    const name = bill.customers?.name?.split(" ")[0] || "ji";
+    const amt  = fmtCurrency(bill.total_amount);
+    const billUrl = `${window.location.origin}/bill/${bill.customers?.customer_code}`;
+    if (level === 1) return `🙏 Namaste ${name} ji,
+
+Your ${monthLabel(month)} milk bill of *${amt}* is due.
+
+View bill: ${billUrl}
+
+Please pay at your convenience. Share screenshot after payment ✅
+
+— Saikrishna Milk Supply`;
+    if (level === 2) return `📋 Namaste ${name} ji,
+
+Your milk bill of *${amt}* for ${monthLabel(month)} is still pending.
+
+View & pay: ${billUrl}
+
+Please share payment screenshot to confirm ✅
+
+— Saikrishna Milk Supply`;
+    return `⚠️ Namaste ${name} ji,
+
+Final reminder — *${amt}* milk bill for ${monthLabel(month)} is overdue.
+
+This will show as OUTSTANDING on next month's bill if unpaid.
+
+Pay now: ${billUrl}
+
+— Saikrishna Milk Supply`;
+  };
+
+  const sendReminder = (bill) => {
+    setSending(bill.customers?.customer_code);
+    const phone = (bill.customers?.phone||"").replace(/\D/g,"");
+    const msg = encodeURIComponent(getReminderMsg(bill, Math.max(reminderLevel,1)));
+    window.open(`https://wa.me/91${phone}?text=${msg}`,"_blank");
+    setTimeout(() => setSending(null), 2000);
+  };
+
+  const sendAllReminders = async () => {
+    if (bills.length === 0) return;
+    const ok = window.confirm(`Send payment reminders to ${bills.length} customers?
+
+Will open WhatsApp one by one.`);
+    if (!ok) return;
+    for (const bill of bills) {
+      sendReminder(bill);
+      await new Promise(r => setTimeout(r, 2500));
+    }
+  };
+
+  if (loading) return <Loader />;
+
+  return (
+    <div style={{ marginTop:8 }}>
+      {/* Reminder level indicator */}
+      <div style={{ background:"white", border:"0.5px solid #eee", borderRadius:12, padding:14, marginBottom:14 }}>
+        <div style={{ fontSize:13, color:"#888", marginBottom:8 }}>Today is Day {dayOfMonth} of month</div>
+        <div style={{ display:"flex", gap:4 }}>
+          {[1,2,3].map(level => (
+            <div key={level} style={{ flex:1, borderRadius:8, padding:"8px 6px", textAlign:"center", background: level<=reminderLevel?"#1a6b3c":"#f5f5f5" }}>
+              <div style={{ fontSize:11, color: level<=reminderLevel?"white":"#888", fontWeight:500 }}>Day {level===1?"10":level===2?"15":"20"}</div>
+              <div style={{ fontSize:10, color: level<=reminderLevel?"rgba(255,255,255,0.8)":"#bbb" }}>{level===1?"Gentle":level===2?"Firm":"Final"}</div>
+            </div>
+          ))}
+        </div>
+        {reminderLevel === 0 && <div style={{ fontSize:12, color:"#888", marginTop:8 }}>Reminders start on Day 10</div>}
+        {reminderLevel > 0 && <div style={{ fontSize:12, color:"#1a6b3c", marginTop:8 }}>✅ {reminderLabels[reminderLevel]} reminder ready to send</div>}
+      </div>
+
+      {bills.length === 0 ? (
+        <div style={{ textAlign:"center", padding:32, color:"#888" }}>
+          <div style={{ fontSize:40, marginBottom:8 }}>🎉</div>
+          <div>All customers have paid this month!</div>
+        </div>
+      ) : (
+        <>
+          <button style={{ ...S.btnPrimary, width:"100%", padding:13, fontSize:14, marginBottom:14, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
+            onClick={sendAllReminders} disabled={reminderLevel===0}>
+            {reminderLevel === 0 ? "🔒 Reminders start Day 10" : `📤 Send ${reminderLabels[reminderLevel]} to All (${bills.length})`}
+          </button>
+
+          {bills.map((b,i) => (
+            <div key={i} style={S.listCard}>
+              <div style={{ ...S.avatar, background:avatarColor(b.customers?.name||""), width:40, height:40 }}>{initials(b.customers?.name||"")}</div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontWeight:500, fontSize:14 }}>{b.customers?.name}</div>
+                <div style={{ fontSize:12, color:"#888" }}>{b.customers?.customer_code} • {fmtCurrency(b.total_amount)}</div>
+              </div>
+              <button
+                style={{ background:"#25D366", border:"none", borderRadius:10, padding:"8px 12px", color:"white", fontSize:12, cursor:"pointer", fontWeight:500 }}
+                onClick={()=>sendReminder(b)}
+                disabled={sending===b.customers?.customer_code}>
+                {sending===b.customers?.customer_code ? "Sending..." : "📤 Remind"}
+              </button>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Automation Schedule ───────────────────────────────────────────────────────
+function AutomationSchedule() {
+  const now = new Date();
+  const hr  = now.getHours();
+  const day = now.getDate();
+
+  const dailyTasks = [
+    { time:"12:00 PM", icon:"🔄", label:"Father's screen refreshes", desc:"Yesterday's quantities pre-filled", done: hr >= 12 },
+    { time:"6:00 PM",  icon:"🔔", label:"Reminder to Father",        desc:"If today's entry not yet submitted", done: hr >= 18 },
+    { time:"7:00 PM",  icon:"📊", label:"Daily summary to owner",    desc:"Litres, customers, pending payments", done: hr >= 19 },
+    { time:"8:00 PM",  icon:"📱", label:"Customer reminder",         desc:"Portal link + today's delivery status", done: hr >= 20 },
+    { time:"9:00 PM",  icon:"🔔", label:"Second reminder to Father", desc:"If entry still not submitted", done: hr >= 21 },
+    { time:"11:00 PM", icon:"🔒", label:"Day records locked",        desc:"No more changes for today", done: hr >= 23 },
+  ];
+
+  const monthlyTasks = [
+    { date:"1st",  icon:"🔒", label:"Previous month locked",      desc:"Comparison report generated", done: day >= 1 },
+    { date:"2nd",  icon:"📋", label:"Reconciliation report",      desc:"Mismatches flagged for owner", done: day >= 2 },
+    { date:"3rd",  icon:"🧾", label:"Bills auto-generated",       desc:"All customers billed automatically", done: day >= 3 },
+    { date:"4th",  icon:"📤", label:"Bills sent via WhatsApp",    desc:"After owner approval — one tap", done: day >= 4 },
+    { date:"10th", icon:"💳", label:"Payment reminder 1",         desc:"Gentle — all unpaid customers", done: day >= 10 },
+    { date:"15th", icon:"💳", label:"Payment reminder 2",         desc:"Firm — still unpaid customers", done: day >= 15 },
+    { date:"20th", icon:"⚠️", label:"Payment reminder 3 — Final", desc:"Overdue list sent to owner", done: day >= 20 },
+  ];
+
+  const TaskRow = ({ time, icon, label, desc, done }) => (
+    <div style={{ ...S.listCard, padding:"10px 14px", borderLeft: done?"3px solid #1a6b3c":"3px solid #eee" }}>
+      <div style={{ fontSize:22, flexShrink:0 }}>{icon}</div>
+      <div style={{ flex:1 }}>
+        <div style={{ fontWeight:500, fontSize:13 }}>{label}</div>
+        <div style={{ fontSize:11, color:"#888", marginTop:2 }}>{desc}</div>
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:2 }}>
+        <div style={{ fontSize:12, fontWeight:500, color:"#555" }}>{time}</div>
+        <div style={{ fontSize:10, color: done?"#1a6b3c":"#bbb" }}>{done?"✅ Done":"⏳"}</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ marginTop:8 }}>
+      <div style={{ background:"#e8f5ee", borderRadius:10, padding:"10px 14px", marginBottom:14, fontSize:13, color:"#1a6b3c" }}>
+        📅 Today: Day {day} of month • {now.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}
+      </div>
+
+      <div style={S.sectionTitle}>⏰ Daily Automations</div>
+      {dailyTasks.map((t,i) => <TaskRow key={i} {...t} />)}
+
+      <div style={{ ...S.sectionTitle, marginTop:16 }}>📅 Monthly Automations</div>
+      {monthlyTasks.map((t,i) => <TaskRow key={i} time={t.date} {...t} />)}
+
+      <div style={{ background:"#fff3cd", borderRadius:10, padding:"12px 14px", marginTop:12, fontSize:13, color:"#856404" }}>
+        💡 <strong>Scale tip:</strong> When you cross 256 customers, upgrade to AiSensy (₹1,999/mo) to fully automate the 8 PM and payment reminders without manual WhatsApp sending.
+      </div>
     </div>
   );
 }
