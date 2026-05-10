@@ -48,6 +48,7 @@ const QTY_OPTIONS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const today = () => new Date().toISOString().split("T")[0];
+const monthLabel = (m) => { if (!m) return ""; const [y,mo] = m.split("-"); return new Date(parseInt(y),parseInt(mo)-1,1).toLocaleDateString("en-IN",{month:"long",year:"numeric"}); };
 const fmtDate = (d) => new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 const fmtCurrency = (n) => "₹" + Number(n || 0).toLocaleString("en-IN");
 const initials = (name = "") => name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
@@ -67,6 +68,7 @@ function getRoute() {
   if (path === "/owner") return { role: "owner" };
   if (path === "/entry") return { role: "father" };
   if (path.startsWith("/c/")) return { role: "customer", code: path.split("/c/")[1] };
+  if (path.startsWith("/bill/")) return { role: "bill", code: path.split("/bill/")[1] };
   return { role: "select" };
 }
 
@@ -627,41 +629,377 @@ function DailyRecords() {
   );
 }
 
+// ─── BILLING ENGINE — Week 3 ──────────────────────────────────────────────────
+
 function BillingSection() {
-  const [month, setMonth] = useState(new Date().toISOString().slice(0,7));
+  const now = new Date();
+  const [month, setMonth] = useState(now.toISOString().slice(0,7));
   const [bills, setBills] = useState([]);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
-  useEffect(()=>{ load(); },[month]);
-  const load = async () => {
+  const [previewBill, setPreviewBill] = useState(null);
+  const [sendingAll, setSendingAll] = useState(false);
+  const [sendProgress, setSendProgress] = useState(0);
+  const [editBill, setEditBill] = useState(null);
+
+  useEffect(()=>{ loadBills(); },[month]);
+
+  const loadBills = async () => {
     setLoading(true);
-    try { const d = await db("bills","GET",null,`?billing_month=eq.${month+"-01"}&select=*,customers(name,customer_code,phone)`); setBills(d||DEMO_BILLS); }
-    catch { setBills(DEMO_BILLS); }
+    try {
+      const d = await db("bills","GET",null,
+        `?billing_month=eq.${month+"-01"}&select=*,customers(name,customer_code,phone,area_name,default_quantity,rate_per_litre,opening_balance)`
+      );
+      setBills(d && d.length > 0 ? d : DEMO_BILLS);
+    } catch { setBills(DEMO_BILLS); }
     setLoading(false);
   };
+
+  // Generate bills from daily entries for the selected month
+  const generateBills = async () => {
+    setGenerating(true);
+    try {
+      // Get all active customers
+      const customers = await db("customers","GET",null,"?is_active=eq.true");
+      // Get all entries for the month
+      const [y,m] = month.split("-");
+      const startDate = `${y}-${m}-01`;
+      const endDate = new Date(parseInt(y), parseInt(m), 0).toISOString().split("T")[0];
+      const entries = await db("daily_entries","GET",null,
+        `?entry_date=gte.${startDate}&entry_date=lte.${endDate}&select=customer_id,quantity_litres`
+      );
+
+      // Group entries by customer
+      const entryMap = {};
+      (entries||[]).forEach(e => {
+        if (!entryMap[e.customer_id]) entryMap[e.customer_id] = 0;
+        entryMap[e.customer_id] += (e.quantity_litres || 0);
+      });
+
+      // Generate bill per customer
+      const generated = [];
+      for (const cust of (customers||DEMO_CUSTOMERS)) {
+        const totalLitres = entryMap[cust.id] || (cust.default_quantity * 30);
+        const milkAmount = Math.round(totalLitres * (cust.rate_per_litre || 68));
+        const outstanding = cust.opening_balance || 0;
+        const totalAmount = milkAmount + outstanding;
+
+        const billPayload = {
+          customer_id: cust.id,
+          billing_month: startDate,
+          total_litres: totalLitres,
+          milk_amount: milkAmount,
+          opening_balance: outstanding,
+          total_amount: totalAmount,
+          status: "pending",
+        };
+
+        try {
+          // Check if bill already exists
+          const existing = await db("bills","GET",null,
+            `?customer_id=eq.${cust.id}&billing_month=eq.${startDate}&limit=1`
+          );
+          if (existing && existing.length > 0) {
+            await db("bills","PATCH",{ total_litres:totalLitres, milk_amount:milkAmount, total_amount:totalAmount },`?id=eq.${existing[0].id}`);
+          } else {
+            await db("bills","POST",billPayload);
+          }
+          generated.push({ ...billPayload, customers: cust });
+        } catch { generated.push({ ...billPayload, customers: cust }); }
+      }
+      setBills(generated);
+    } catch(e) {
+      // Demo fallback
+      setBills(DEMO_BILLS);
+    }
+    setGenerating(false);
+    alert(`✅ Bills generated for ${monthLabel(month)}!\n\nReview each bill, then send via WhatsApp.`);
+  };
+
+  // Send single bill via WhatsApp
+  const sendBillWhatsApp = (bill) => {
+    const cust = bill.customers;
+    const phone = (cust?.phone||"").replace(/\D/g,"");
+    const billUrl = `${window.location.origin}/bill/${cust?.customer_code||"C001"}`;
+    const msg = encodeURIComponent(
+`🥛 *Saikrishna Milk Supply*
+Namaste ${cust?.name?.split(" ")[0]} ji 🙏
+
+Your ${monthLabel(month)} milk bill is ready!
+
+📋 Total Litres: ${bill.total_litres?.toFixed(1)}L
+${(bill.opening_balance||0)>0?`⚠️ Previous Outstanding: ${fmtCurrency(bill.opening_balance)}\n`:""}💰 *Total Due: ${fmtCurrency(bill.total_amount)}*
+
+👉 View full bill: ${billUrl}
+
+Pay via GPay/PhonePe/Paytm:
+UPI: ${UPI_ID}
+
+After paying, please share payment screenshot here to confirm ✅
+
+Thank you! 🙏`
+    );
+    window.open(`https://wa.me/91${phone}?text=${msg}`, "_blank");
+  };
+
+  // Bulk send all pending bills
+  const sendAllWhatsApp = async () => {
+    const pending = bills.filter(b => b.status !== "paid");
+    if (pending.length === 0) { alert("All bills are already paid!"); return; }
+    const ok = window.confirm(`Send bills to ${pending.length} customers via WhatsApp?\n\nThis will open WhatsApp one by one.`);
+    if (!ok) return;
+    setSendingAll(true);
+    for (let i = 0; i < pending.length; i++) {
+      setSendProgress(i + 1);
+      sendBillWhatsApp(pending[i]);
+      await new Promise(r => setTimeout(r, 2500)); // 2.5s gap between each
+    }
+    setSendingAll(false);
+    setSendProgress(0);
+    alert(`✅ Sent ${pending.length} bills via WhatsApp!`);
+  };
+
   const totalAmount = bills.reduce((s,b)=>s+(b.total_amount||0),0);
   const paidCount = bills.filter(b=>b.status==="paid").length;
+  const pendingCount = bills.length - paidCount;
+  const pendingAmount = bills.filter(b=>b.status!=="paid").reduce((s,b)=>s+(b.total_amount||0),0);
+
   return (
     <div style={{ padding:16 }}>
-      <div style={S.sectionTitle}>🧾 Billing</div>
-      <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+      <div style={S.sectionTitle}>🧾 Month-End Billing</div>
+
+      {/* Month selector + Generate */}
+      <div style={{ display:"flex", gap:8, marginBottom:16 }}>
         <input type="month" value={month} onChange={e=>setMonth(e.target.value)} style={{ ...S.formInput, flex:1, marginBottom:0 }} />
-        <button style={S.btnPrimary} onClick={async()=>{ setGenerating(true); await new Promise(r=>setTimeout(r,1500)); setGenerating(false); alert("Bills generated for "+month+"!"); }} disabled={generating}>{generating?"⏳...":"Generate"}</button>
+        <button style={{ ...S.btnPrimary, padding:"10px 14px", whiteSpace:"nowrap" }}
+          onClick={generateBills} disabled={generating}>
+          {generating ? "⏳ Generating..." : "⚡ Generate Bills"}
+        </button>
       </div>
+
+      {generating && (
+        <div style={{ background:"#e8f5ee", borderRadius:10, padding:"12px 14px", marginBottom:12, fontSize:13, color:"#1a6b3c" }}>
+          ⏳ Calculating bills from daily entries... Please wait.
+        </div>
+      )}
+
+      {/* Stats */}
       <div style={S.statsGrid}>
         <StatCard label="Total Bills" value={bills.length} icon="🧾" color="#1565C0" />
         <StatCard label="Total Amount" value={fmtCurrency(totalAmount)} icon="💰" color="#1a6b3c" />
         <StatCard label="Paid" value={paidCount} icon="✅" color="#2E7D32" />
-        <StatCard label="Pending" value={bills.length-paidCount} icon="⏳" color="#c62828" />
+        <StatCard label="Pending" value={pendingCount} icon="⏳" color="#c62828" />
       </div>
-      <button style={{ ...S.btnPrimary, width:"100%", padding:12, marginBottom:12 }}>📤 Send All via WhatsApp</button>
+
+      {/* Bulk send */}
+      {pendingCount > 0 && (
+        <button
+          style={{ ...S.btnPrimary, width:"100%", padding:13, marginBottom:12, fontSize:14, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
+          onClick={sendAllWhatsApp} disabled={sendingAll}>
+          {sendingAll
+            ? `📤 Sending ${sendProgress}/${pendingCount}...`
+            : `📤 Send All ${pendingCount} Bills via WhatsApp`}
+        </button>
+      )}
+
+      {/* Bill list */}
       {loading ? <Loader /> : bills.map((b,i) => (
         <div key={i} style={S.listCard}>
-          <div style={{ ...S.avatar, background:avatarColor(b.customers?.name||""), width:36, height:36, fontSize:12 }}>{initials(b.customers?.name||"")}</div>
-          <div style={{ flex:1 }}><div style={{fontWeight:500,fontSize:14}}>{b.customers?.name||"Customer"}</div><div style={{fontSize:12,color:"#888"}}>{b.customers?.customer_code}</div></div>
-          <div style={{ textAlign:"right" }}><div style={{fontWeight:600}}>{fmtCurrency(b.total_amount)}</div><div style={{...S.statusBadge,...(b.status==="paid"?S.badgePaid:S.badgePending)}}>{b.status==="paid"?"✅ Paid":"⏳ Pending"}</div></div>
+          <div style={{ ...S.avatar, background:avatarColor(b.customers?.name||""), width:40, height:40, fontSize:13 }}>
+            {initials(b.customers?.name||"")}
+          </div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontWeight:500, fontSize:14, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{b.customers?.name||"Customer"}</div>
+            <div style={{ fontSize:12, color:"#888" }}>{b.customers?.customer_code} • {b.total_litres?.toFixed(1)}L</div>
+            {(b.opening_balance||0)>0 && <div style={{ fontSize:11, color:"#c62828" }}>+{fmtCurrency(b.opening_balance)} outstanding</div>}
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4 }}>
+            <div style={{ fontWeight:600, fontSize:15 }}>{fmtCurrency(b.total_amount)}</div>
+            <div style={{ ...S.statusBadge, ...(b.status==="paid"?S.badgePaid:S.badgePending) }}>
+              {b.status==="paid"?"✅ Paid":"⏳ Pending"}
+            </div>
+            <div style={{ display:"flex", gap:4, marginTop:2 }}>
+              <button style={{ fontSize:11, padding:"3px 8px", background:"#e8f5ee", border:"0.5px solid #b8dfc8", borderRadius:8, color:"#1a6b3c", cursor:"pointer" }}
+                onClick={()=>setPreviewBill(b)}>👁 View</button>
+              {b.status !== "paid" && (
+                <button style={{ fontSize:11, padding:"3px 8px", background:"#e7f3ff", border:"0.5px solid #b3d4f5", borderRadius:8, color:"#1565C0", cursor:"pointer" }}
+                  onClick={()=>sendBillWhatsApp(b)}>📤 Send</button>
+              )}
+            </div>
+          </div>
         </div>
       ))}
+
+      {/* Bill Preview Modal */}
+      {previewBill && (
+        <div style={{ ...S.modalBg, alignItems:"flex-start", overflowY:"auto" }} onClick={()=>setPreviewBill(null)}>
+          <div style={{ ...S.modal, borderRadius:0, minHeight:"100vh", paddingBottom:40 }} onClick={e=>e.stopPropagation()}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
+              <button style={{ background:"none", border:"none", fontSize:22, cursor:"pointer", color:"#888" }} onClick={()=>setPreviewBill(null)}>←</button>
+              <div style={{ fontWeight:600, fontSize:16 }}>Bill Preview</div>
+              <button style={{ marginLeft:"auto", ...S.btnPrimary, padding:"8px 14px", fontSize:13 }} onClick={()=>sendBillWhatsApp(previewBill)}>📤 Send WhatsApp</button>
+            </div>
+            <BillView bill={previewBill} customer={previewBill.customers} month={month} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── BILL VIEW — used in preview modal + /bill/CODE page ─────────────────────
+function BillView({ bill, customer, month, entries }) {
+  const [year, mon] = (month||"").split("-");
+  const daysInMonth = month ? new Date(parseInt(year), parseInt(mon), 0).getDate() : 30;
+  const upiLink = `upi://pay?pa=${UPI_ID}&pn=Saikrishna+Milk+Supply&am=${bill?.total_amount||0}&cu=INR&tn=MilkBill${month||""}`;
+  const billUrl = `${window.location.origin}/bill/${customer?.customer_code||"C001"}`;
+  const whatsappUrl = `https://wa.me/91${(customer?.phone||"").replace(/\D/g,"")}`;
+
+  return (
+    <div style={{ maxWidth:480, margin:"0 auto", fontFamily:"sans-serif" }}>
+      {/* Header */}
+      <div style={{ background:"linear-gradient(135deg,#0a3d1f,#1a6b3c)", borderRadius:14, padding:"20px 20px 16px", marginBottom:12, color:"white" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:12 }}>
+          {/* Logo placeholder — replace src with real logo URL */}
+          <div style={{ width:52, height:52, borderRadius:10, background:"rgba(255,255,255,0.15)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:28, flexShrink:0 }}>🥛</div>
+          <div>
+            <div style={{ fontSize:18, fontWeight:700 }}>Saikrishna Milk Supply</div>
+            <div style={{ fontSize:12, opacity:0.85 }}>UPI: {UPI_ID}</div>
+          </div>
+        </div>
+        <div style={{ display:"flex", justifyContent:"space-between", background:"rgba(255,255,255,0.1)", borderRadius:8, padding:"10px 14px" }}>
+          <div><div style={{ fontSize:11, opacity:0.75 }}>Customer</div><div style={{ fontWeight:600, fontSize:14 }}>{customer?.name}</div></div>
+          <div style={{ textAlign:"right" }}><div style={{ fontSize:11, opacity:0.75 }}>Code</div><div style={{ fontWeight:600, fontSize:14 }}>{customer?.customer_code}</div></div>
+          <div style={{ textAlign:"right" }}><div style={{ fontSize:11, opacity:0.75 }}>Month</div><div style={{ fontWeight:600, fontSize:14 }}>{monthLabel(month)}</div></div>
+        </div>
+      </div>
+
+      {/* Summary strip */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:12 }}>
+        {[
+          ["📦 Total Litres", `${(bill?.total_litres||0).toFixed(1)} L`],
+          ["💲 Rate", `₹${customer?.rate_per_litre||68}/L`],
+          ["📅 Period", `${daysInMonth} days`],
+        ].map(([l,v])=>(
+          <div key={l} style={{ background:"#f8f9fa", borderRadius:10, padding:"10px 8px", textAlign:"center" }}>
+            <div style={{ fontSize:11, color:"#888", marginBottom:2 }}>{l}</div>
+            <div style={{ fontWeight:600, fontSize:14, color:"#111" }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Day-wise table */}
+      {entries && entries.length > 0 && (
+        <div style={{ background:"white", border:"0.5px solid #eee", borderRadius:12, marginBottom:12, overflow:"hidden" }}>
+          <div style={{ background:"#f8f9fa", padding:"10px 14px", fontSize:12, fontWeight:600, color:"#555", borderBottom:"0.5px solid #eee", display:"grid", gridTemplateColumns:"50px 1fr 60px 70px" }}>
+            <span>Date</span><span>Day</span><span style={{textAlign:"center"}}>Litres</span><span style={{textAlign:"right"}}>Amount</span>
+          </div>
+          <div style={{ maxHeight:280, overflowY:"auto" }}>
+            {entries.map((e,i)=>{
+              const d = new Date(e.entry_date);
+              const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+              const amt = (e.quantity_litres||0) * (customer?.rate_per_litre||68);
+              return (
+                <div key={i} style={{ display:"grid", gridTemplateColumns:"50px 1fr 60px 70px", padding:"8px 14px", borderBottom:"0.5px solid #f5f5f5", fontSize:13, background:i%2===0?"white":"#fafafa" }}>
+                  <span style={{ color:"#888" }}>{d.getDate().toString().padStart(2,"0")}</span>
+                  <span style={{ color:"#555" }}>{days[d.getDay()]}</span>
+                  <span style={{ textAlign:"center", color:e.quantity_litres===0?"#c62828":"#1a6b3c", fontWeight:500 }}>{e.quantity_litres===0?"🚫":e.quantity_litres+"L"}</span>
+                  <span style={{ textAlign:"right", color:"#111" }}>{e.quantity_litres===0?"—":fmtCurrency(Math.round(amt))}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Bill totals */}
+      <div style={{ background:"white", border:"0.5px solid #eee", borderRadius:12, padding:"16px", marginBottom:12 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:14, color:"#555" }}>
+          <span>Milk charges ({(bill?.total_litres||0).toFixed(1)}L × ₹{customer?.rate_per_litre||68})</span>
+          <span>{fmtCurrency(bill?.milk_amount || Math.round((bill?.total_litres||0)*(customer?.rate_per_litre||68)))}</span>
+        </div>
+        {(bill?.opening_balance||0) > 0 && (
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8, fontSize:14, color:"#c62828" }}>
+            <span>Previous outstanding</span>
+            <span>+{fmtCurrency(bill.opening_balance)}</span>
+          </div>
+        )}
+        <div style={{ borderTop:"1.5px solid #1a6b3c", marginTop:10, paddingTop:10, display:"flex", justifyContent:"space-between" }}>
+          <span style={{ fontWeight:700, fontSize:17 }}>TOTAL DUE</span>
+          <span style={{ fontWeight:700, fontSize:20, color:"#c62828" }}>{fmtCurrency(bill?.total_amount)}</span>
+        </div>
+      </div>
+
+      {/* Pay button */}
+      <a href={upiLink} style={{ display:"block", background:"#1a6b3c", color:"white", textAlign:"center", padding:"15px", borderRadius:12, fontSize:16, fontWeight:600, textDecoration:"none", marginBottom:10 }}>
+        💳 Pay {fmtCurrency(bill?.total_amount)} — GPay / PhonePe / Paytm
+      </a>
+
+      {/* Screenshot reminder */}
+      <div style={{ background:"#fff3cd", border:"1px solid #ffc107", borderRadius:10, padding:"12px 14px", marginBottom:12, fontSize:13, color:"#856404", textAlign:"center" }}>
+        ⚠️ After paying, <strong>share your payment screenshot on WhatsApp</strong><br/>
+        Unshared payments show as OUTSTANDING on next bill
+      </div>
+
+      {/* WhatsApp share */}
+      <a href={whatsappUrl} style={{ display:"block", background:"#25D366", color:"white", textAlign:"center", padding:"13px", borderRadius:12, fontSize:14, fontWeight:500, textDecoration:"none", marginBottom:20 }}>
+        📸 Share Payment Screenshot on WhatsApp
+      </a>
+
+      <div style={{ textAlign:"center", fontSize:11, color:"#bbb", paddingBottom:20 }}>
+        {customer?.customer_code} • {monthLabel(month)} • Saikrishna Milk Supply
+      </div>
+    </div>
+  );
+}
+
+// ─── BILL WEBPAGE — /bill/CODE route ─────────────────────────────────────────
+function BillPage({ customerCode }) {
+  const [bill, setBill] = useState(null);
+  const [customer, setCustomer] = useState(null);
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const now = new Date();
+  const month = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+
+  useEffect(()=>{ load(); },[]);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const custs = await db("customers","GET",null,`?customer_code=eq.${customerCode}&limit=1`);
+      const cust = custs?.[0] || DEMO_CUSTOMERS.find(c=>c.customer_code===customerCode) || DEMO_CUSTOMERS[0];
+      setCustomer(cust);
+
+      const [y,m] = month.split("-");
+      const startDate = `${y}-${m}-01`;
+      const endDate = new Date(parseInt(y),parseInt(m),0).toISOString().split("T")[0];
+
+      const [bills, monthEntries] = await Promise.all([
+        db("bills","GET",null,`?customer_id=eq.${cust.id}&billing_month=eq.${startDate}&limit=1`),
+        db("daily_entries","GET",null,`?customer_id=eq.${cust.id}&entry_date=gte.${startDate}&entry_date=lte.${endDate}&order=entry_date`),
+      ]);
+
+      setBill(bills?.[0] || DEMO_BILL);
+      setEntries(monthEntries || DEMO_PORTAL_ENTRIES.slice(0,10));
+    } catch {
+      setCustomer(DEMO_CUSTOMERS[0]);
+      setBill(DEMO_BILL);
+      setEntries(DEMO_PORTAL_ENTRIES.slice(0,10));
+    }
+    setLoading(false);
+  };
+
+  if (loading) return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"100vh", flexDirection:"column", gap:12 }}>
+      <div style={{ fontSize:40 }}>🥛</div>
+      <div style={{ fontSize:14, color:"#888" }}>Loading your bill...</div>
+    </div>
+  );
+
+  return (
+    <div style={{ background:"#f8f9fa", minHeight:"100vh", padding:"16px 12px" }}>
+      <BillView bill={bill} customer={customer} month={month} entries={entries} />
     </div>
   );
 }
@@ -881,6 +1219,15 @@ export default function App() {
   if (!pinsLoaded) return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",fontSize:40}}>🥛</div>
   );
+
+  // Bill webpage — /bill/CODE — no PIN, direct access
+  if (route.role === "bill") {
+    return (
+      <div style={{ maxWidth:520, margin:"0 auto" }}>
+        <BillPage customerCode={route.code} />
+      </div>
+    );
+  }
 
   // Customer portal — no PIN, direct access
   if (route.role === "customer") {
