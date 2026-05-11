@@ -1,9 +1,34 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
-import App from "./App.jsx";
-
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#1a6b3c" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>MilkFlow — Saikrishna Milk Supply</title>
+    <link rel="manifest" href="/manifest.json" />
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #f8f9fa;
+        -webkit-font-smoothing: antialiased;
+      }
+      #root { min-height: 100vh; }
+      button { font-family: inherit; }
+      input, select, textarea { font-family: inherit; }
+      @keyframes shake {
+        0%, 100% { transform: translateX(0); }
+        20% { transform: translateX(-8px); }
+        40% { transform: translateX(8px); }
+        60% { transform: translateX(-8px); }
+        80% { transform: translateX(8px); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
