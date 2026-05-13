@@ -3585,7 +3585,7 @@ function PortalPayConfirm({ bill, customer }) {
   const [submitting, setSubmitting] = useState(false);
   const upiLink = `upi://pay?pa=${UPI_ID}&pn=Saikrishna+Milk+Supply&am=${bill?.total_amount||0}&cu=INR&tn=MF-${customer?.customer_code||"C001"}`;
   const waLink = `https://wa.me/91${(customer?.phone||"XXXXXXXXXX").replace(/\D/g,"")}`;
-  const WHATSAPP_NUMBER = "919XXXXXXXXX"; // Replace with owner's WhatsApp
+  const WHATSAPP_NUMBER = "919987073536"; // Replace with owner's WhatsApp
 
   const submitPaid = async () => {
     if (txnLast4.length < 4) { alert("Please enter last 4 digits of your transaction ID"); return; }
