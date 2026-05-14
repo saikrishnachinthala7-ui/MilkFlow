@@ -22,7 +22,7 @@ async function db(table, method = "GET", body = null, query = "") {
 }
 
 // ─── PIN helpers — stored in Supabase settings table ─────────────────────────
-let CACHED_PINS = { owner_pin: "1234", father_pin: "0000" };
+let CACHED_PINS = { owner_pin: "7142", father_pin: "8652" };
 
 async function loadPins() {
   try {
