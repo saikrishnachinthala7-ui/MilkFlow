@@ -3585,7 +3585,7 @@ function PortalPayConfirm({ bill, customer }) {
   const [submitting, setSubmitting] = useState(false);
   const upiLink = `upi://pay?pa=${UPI_ID}&pn=Saikrishna+Milk+Supply&am=${bill?.total_amount||0}&cu=INR&tn=MF-${customer?.customer_code||"C001"}`;
   const waLink = `https://wa.me/91${(customer?.phone||"XXXXXXXXXX").replace(/\D/g,"")}`;
-  const WHATSAPP_NUMBER = "919XXXXXXXXX"; // Replace with owner's WhatsApp
+  const WHATSAPP_NUMBER = "919987073536"; // Replace with owner's WhatsApp
 
   const submitPaid = async () => {
     if (txnLast4.length < 4) { alert("Please enter last 4 digits of your transaction ID"); return; }
@@ -3909,7 +3909,7 @@ function PortalPay({ bill }) {
         <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}><span style={{color:"#888"}}>UPI ID</span><span>{UPI_ID}</span></div>
       </div>
       <a href={upiLink} style={{...S.btnSave,display:"block",textAlign:"center",padding:16,fontSize:16,textDecoration:"none",marginBottom:12}}>📱 Pay via GPay / PhonePe / Paytm</a>
-      <a href="https://wa.me/91XXXXXXXXXX" style={{...S.btnCancel,display:"block",textAlign:"center",padding:14,fontSize:14,textDecoration:"none"}}>📸 Share Payment Screenshot on WhatsApp</a>
+      <a href="https://wa.me/919987073536" style={{...S.btnCancel,display:"block",textAlign:"center",padding:14,fontSize:14,textDecoration:"none"}}>📸 Share Payment Screenshot on WhatsApp</a>
     </div>
   );
 }
