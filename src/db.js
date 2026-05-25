@@ -1,259 +1,364 @@
-// ─── Supabase Database Layer — Exact Schema Match ─────────────────────────────
+// MilkFlow — db.js — Complete Database Layer v3.1
 const SUPABASE_URL = "https://ehsqnfmctdosebfcakwv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_r85tUWIcXp-tRJ7OypsXWw_Oy4ijkfh";
 
-export async function db(table, method = "GET", body = null, query = "") {
-  const url = `${SUPABASE_URL}/rest/v1/${table}${query}`;
-  const headers = {
-    apikey: SUPABASE_KEY,
-    Authorization: `Bearer ${SUPABASE_KEY}`,
-    "Content-Type": "application/json",
-  };
-  if (method === "POST") headers["Prefer"] = "return=representation";
-  if (method === "PATCH") headers["Prefer"] = "return=representation";
-  const res = await fetch(url, {
-    method,
+const headers = {
+  "Content-Type": "application/json",
+  apikey: SUPABASE_KEY,
+  Authorization: `Bearer ${SUPABASE_KEY}`,
+  Prefer: "return=representation",
+};
+
+async function sb(path, options = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     headers,
-    body: body ? JSON.stringify(body) : null,
+    ...options,
   });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err);
-  }
-  if (method === "DELETE") return null;
   const text = await res.text();
-  return text ? JSON.parse(text) : null;
+  if (!res.ok) throw new Error(text || res.statusText);
+  return text ? JSON.parse(text) : [];
 }
 
-// ─── EXACT COLUMN MAPPING ─────────────────────────────────────────────────────
-// customers:     id, code, name, phone, address, area_id, brand_id,
-//                default_qty, custom_rate, credit_limit, outstanding,
-//                active, portal_token, joined_date, created_at
-// milk_brands:   id, name, rate, unit, active, created_at
-// areas:         id, name, created_at
-// daily_entries: id, customer_id, entry_date, brand_id, quantity, rate,
-//                amount, submitted_by, created_at
-// bills:         id, bill_number, customer_id, month, year, period_from,
-//                period_to, total_litres, month_amount, outstanding,
-//                total_amount, status, sent_at, locked, created_at
-// payments:      id, customer_id, bill_id, amount, payment_method,
-//                payment_date, screenshot_url, transaction_ref, status,
-//                fraud_flags, confirmed_at, notes, created_at
-// customer_entries: id, customer_id, entry_date, quantity, created_at
-// settings:      id, key, value, updated_at
-// disputes:      id, customer_id, bill_id, dispute_date, issue,
-//                status, resolution, resolved_at, created_at
-// rate_history:  id, brand_id, old_rate, new_rate, changed_at, changed_by
-// notification_log: id, customer_id, type, message, sent_at, status
-// whatsapp_templates: id, name, type, message, active, created_at
-
-// ─── PIN MANAGEMENT ───────────────────────────────────────────────────────────
-export let PINS = { owner: "1234", father: "0000" };
-
-export async function loadPins() {
-  try {
-    const rows = await db("settings", "GET", null, "?key=in.(owner_pin,father_pin)&select=key,value");
-    (rows || []).forEach(r => {
-      if (r.key === "owner_pin") PINS.owner = r.value;
-      if (r.key === "father_pin") PINS.father = r.value;
-    });
-  } catch { /* use defaults */ }
+// ─── AREAS (GROUPS) ───────────────────────────────────────────────────────────
+export async function getAreas() {
+  return sb("/areas?select=*&order=name");
 }
-
-// ─── CUSTOMERS ────────────────────────────────────────────────────────────────
-export async function getCustomers() {
-  return await db("customers", "GET", null,
-    "?active=eq.true&order=name&select=id,code,name,phone,address,default_qty,custom_rate,outstanding,active,brand_id,area_id,milk_brands(id,name,rate)"
-  );
-}
-
-export async function addCustomer(data) {
-  // data: { name, phone, address, brand_id, default_qty, custom_rate, outstanding }
-  const code = "C" + String(Date.now()).slice(-5);
-  return await db("customers", "POST", {
-    code,
-    name: data.name,
-    phone: data.phone,
-    address: data.address || "",
-    brand_id: data.brand_id || null,
-    default_qty: parseFloat(data.default_qty) || 1,
-    custom_rate: parseFloat(data.custom_rate) || null,
-    outstanding: parseFloat(data.outstanding) || 0,
-    active: true,
-    joined_date: new Date().toISOString().split("T")[0],
+export async function addArea(name, delivery_boy_name = "") {
+  return sb("/areas", {
+    method: "POST",
+    body: JSON.stringify({ name, delivery_boy_name }),
   });
 }
-
-export async function updateCustomer(id, data) {
-  return await db("customers", "PATCH", data, `?id=eq.${id}`);
+export async function updateArea(id, name, delivery_boy_name = "") {
+  return sb(`/areas?id=eq.${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name, delivery_boy_name }),
+  });
+}
+export async function deleteArea(id) {
+  return sb(`/areas?id=eq.${id}`, { method: "DELETE" });
 }
 
-export async function deactivateCustomer(id) {
-  return await db("customers", "PATCH", { active: false }, `?id=eq.${id}`);
+// ─── SUBGROUPS ────────────────────────────────────────────────────────────────
+export async function getSubgroups(area_id = null) {
+  const filter = area_id ? `&area_id=eq.${area_id}` : "";
+  return sb(`/subgroups?select=*${filter}&order=name`);
+}
+export async function addSubgroup(area_id, name) {
+  return sb("/subgroups", {
+    method: "POST",
+    body: JSON.stringify({ area_id, name }),
+  });
+}
+export async function updateSubgroup(id, name) {
+  return sb(`/subgroups?id=eq.${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+export async function deleteSubgroup(id) {
+  return sb(`/subgroups?id=eq.${id}`, { method: "DELETE" });
 }
 
-export async function deleteCustomer(id) {
-  return await db("customers", "DELETE", null, `?id=eq.${id}`);
-}
-
-// ─── MILK BRANDS ──────────────────────────────────────────────────────────────
+// ─── MILK BRANDS ─────────────────────────────────────────────────────────────
 export async function getBrands() {
-  return await db("milk_brands", "GET", null, "?active=eq.true&order=name&select=id,name,rate,unit");
+  return sb("/milk_brands?select=*&active=eq.true&order=name");
 }
-
-export async function addBrand(name, rate) {
-  return await db("milk_brands", "POST", { name, rate: parseFloat(rate), unit: "litre", active: true });
+export async function getAllBrands() {
+  return sb("/milk_brands?select=*&order=name");
 }
-
-export async function updateBrand(id, name, rate) {
-  return await db("milk_brands", "PATCH", { name, rate: parseFloat(rate) }, `?id=eq.${id}`);
+export async function addBrand(name, rate, unit = "litre") {
+  return sb("/milk_brands", {
+    method: "POST",
+    body: JSON.stringify({ name, rate, unit, active: true }),
+  });
 }
-
+export async function updateBrand(id, name, rate, unit = "litre") {
+  return sb(`/milk_brands?id=eq.${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name, rate, unit }),
+  });
+}
 export async function deleteBrand(id) {
-  return await db("milk_brands", "PATCH", { active: false }, `?id=eq.${id}`);
+  return sb(`/milk_brands?id=eq.${id}`, { method: "DELETE" });
 }
 
-// ─── DAILY ENTRIES ────────────────────────────────────────────────────────────
-export function todayStr() { return new Date().toISOString().split("T")[0]; }
-
-export async function getTodayEntries() {
-  return await db("daily_entries", "GET", null,
-    `?entry_date=eq.${todayStr()}&select=id,customer_id,quantity,submitted_by`
+// ─── CUSTOMERS ───────────────────────────────────────────────────────────────
+export async function getCustomers() {
+  return sb(
+    "/customers?select=*,areas(*),subgroups(*),milk_brands(*)&order=code"
   );
 }
-
-export async function saveEntry(customerId, quantity, brandId, rate) {
-  const amount = parseFloat(quantity) * parseFloat(rate || 0);
-  // Check if entry exists for today
-  const existing = await db("daily_entries", "GET", null,
-    `?customer_id=eq.${customerId}&entry_date=eq.${todayStr()}&limit=1`
+export async function getActiveCustomers() {
+  return sb(
+    "/customers?select=*,areas(*),subgroups(*),milk_brands(*)&active=eq.true&order=code"
   );
-  if (existing && existing.length > 0) {
-    return await db("daily_entries", "PATCH",
-      { quantity: parseFloat(quantity), amount },
-      `?id=eq.${existing[0].id}`
-    );
-  }
-  return await db("daily_entries", "POST", {
-    customer_id: customerId,
-    entry_date: todayStr(),
-    brand_id: brandId || null,
-    quantity: parseFloat(quantity),
-    rate: parseFloat(rate || 0),
-    amount,
-    submitted_by: "father",
+}
+export async function getCustomerByCode(code) {
+  const rows = await sb(
+    `/customers?select=*,areas(*),subgroups(*),milk_brands(*)&code=eq.${encodeURIComponent(code)}`
+  );
+  return rows[0] || null;
+}
+export async function getCustomerByToken(token) {
+  const rows = await sb(
+    `/customers?select=*,areas(*),subgroups(*),milk_brands(*)&portal_token=eq.${encodeURIComponent(token)}`
+  );
+  return rows[0] || null;
+}
+export async function addCustomer(data) {
+  return sb("/customers", {
+    method: "POST",
+    body: JSON.stringify({
+      code: data.code,
+      name: data.name,
+      phone: data.phone,
+      address: data.address,
+      area_id: data.area_id || null,
+      subgroup_id: data.subgroup_id || null,
+      brand_id: data.brand_id || null,
+      default_qty: parseFloat(data.default_qty) || 1,
+      custom_rate: data.custom_rate ? parseFloat(data.custom_rate) : null,
+      credit_limit: parseFloat(data.credit_limit) || 0,
+      outstanding: parseFloat(data.outstanding) || 0,
+      active: true,
+      portal_token: data.code,
+      joined_date: new Date().toISOString().split("T")[0],
+    }),
   });
 }
-
-// ─── CUSTOMER ENTRIES ─────────────────────────────────────────────────────────
-export async function saveCustomerEntry(customerId, quantity) {
-  const existing = await db("customer_entries", "GET", null,
-    `?customer_id=eq.${customerId}&entry_date=eq.${todayStr()}&limit=1`
-  );
-  if (existing && existing.length > 0) {
-    return await db("customer_entries", "PATCH",
-      { quantity: parseFloat(quantity) },
-      `?id=eq.${existing[0].id}`
-    );
-  }
-  return await db("customer_entries", "POST", {
-    customer_id: customerId,
-    entry_date: todayStr(),
-    quantity: parseFloat(quantity),
+export async function updateCustomer(id, data) {
+  return sb(`/customers?id=eq.${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      code: data.code,
+      name: data.name,
+      phone: data.phone,
+      address: data.address,
+      area_id: data.area_id || null,
+      subgroup_id: data.subgroup_id || null,
+      brand_id: data.brand_id || null,
+      default_qty: parseFloat(data.default_qty) || 1,
+      custom_rate: data.custom_rate ? parseFloat(data.custom_rate) : null,
+      credit_limit: parseFloat(data.credit_limit) || 0,
+      outstanding: parseFloat(data.outstanding) || 0,
+      portal_token: data.code,
+    }),
   });
 }
+export async function deactivateCustomer(id) {
+  return sb(`/customers?id=eq.${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ active: false }),
+  });
+}
+export async function deleteCustomer(id) {
+  return sb(`/customers?id=eq.${id}`, { method: "DELETE" });
+}
 
-export async function getCustomerEntries(customerId, startDate, endDate) {
-  return await db("customer_entries", "GET", null,
-    `?customer_id=eq.${customerId}&entry_date=gte.${startDate}&entry_date=lte.${endDate}&order=entry_date.desc`
+// ─── DAILY ENTRIES ───────────────────────────────────────────────────────────
+export async function getDailyEntries(date) {
+  return sb(
+    `/daily_entries?select=*,customers(id,code,name,subgroup_id,area_id)&entry_date=eq.${date}&order=created_at`
   );
+}
+export async function getDailyEntriesForCustomer(customer_id) {
+  return sb(
+    `/daily_entries?select=*&customer_id=eq.${customer_id}&order=entry_date.desc&limit=30`
+  );
+}
+export async function upsertDailyEntry(data) {
+  const existing = await sb(
+    `/daily_entries?customer_id=eq.${data.customer_id}&entry_date=eq.${data.entry_date}`
+  );
+  if (existing.length > 0) {
+    return sb(`/daily_entries?id=eq.${existing[0].id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        quantity: data.quantity,
+        brand_id: data.brand_id,
+        rate: data.rate,
+        amount: data.quantity * data.rate,
+        submitted_by: data.submitted_by || "father",
+      }),
+    });
+  }
+  return sb("/daily_entries", {
+    method: "POST",
+    body: JSON.stringify({
+      customer_id: data.customer_id,
+      entry_date: data.entry_date,
+      brand_id: data.brand_id,
+      quantity: data.quantity,
+      rate: data.rate,
+      amount: data.quantity * data.rate,
+      submitted_by: data.submitted_by || "father",
+    }),
+  });
+}
+export async function deleteDailyEntry(customer_id, entry_date) {
+  return sb(
+    `/daily_entries?customer_id=eq.${customer_id}&entry_date=eq.${entry_date}`,
+    { method: "DELETE" }
+  );
+}
+export async function getMonthEntries(customer_id, month, year) {
+  const from = `${year}-${String(month).padStart(2, "0")}-01`;
+  const to = `${year}-${String(month).padStart(2, "0")}-31`;
+  return sb(
+    `/daily_entries?customer_id=eq.${customer_id}&entry_date=gte.${from}&entry_date=lte.${to}&order=entry_date`
+  );
+}
+
+// ─── BILLS ───────────────────────────────────────────────────────────────────
+export async function getBills(customer_id = null) {
+  const filter = customer_id ? `&customer_id=eq.${customer_id}` : "";
+  return sb(`/bills?select=*,customers(name,code,phone)${filter}&order=created_at.desc`);
+}
+export async function getBillByCode(bill_number) {
+  const rows = await sb(
+    `/bills?select=*,customers(*)&bill_number=eq.${encodeURIComponent(bill_number)}`
+  );
+  return rows[0] || null;
+}
+export async function createBill(data) {
+  return sb("/bills", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+export async function updateBill(id, data) {
+  return sb(`/bills?id=eq.${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
 }
 
 // ─── PAYMENTS ─────────────────────────────────────────────────────────────────
-export async function getPayments() {
-  return await db("payments", "GET", null,
-    "?order=created_at.desc&limit=100&select=id,customer_id,amount,payment_method,payment_date,transaction_ref,status,notes,created_at,customers(name,code,phone)"
+export async function getPayments(customer_id = null) {
+  const filter = customer_id ? `&customer_id=eq.${customer_id}` : "";
+  return sb(
+    `/payments?select=*,customers(name,code)${filter}&order=created_at.desc`
   );
 }
-
+export async function getPendingPayments() {
+  return sb(
+    "/payments?select=*,customers(name,code,phone)&status=eq.pending&order=created_at.desc"
+  );
+}
 export async function addPayment(data) {
-  return await db("payments", "POST", {
-    customer_id: data.customer_id,
-    bill_id: data.bill_id || null,
-    amount: parseFloat(data.amount),
-    payment_method: data.payment_method || "upi",
-    payment_date: todayStr(),
-    transaction_ref: data.transaction_ref || null,
-    status: data.status || "pending_confirmation",
-    notes: data.notes || null,
+  return sb("/payments", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+export async function updatePayment(id, status, notes = "") {
+  return sb(`/payments?id=eq.${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status,
+      notes,
+      confirmed_at: status === "confirmed" ? new Date().toISOString() : null,
+    }),
   });
 }
 
-export async function confirmPayment(id) {
-  return await db("payments", "PATCH",
-    { status: "confirmed", confirmed_at: new Date().toISOString() },
-    `?id=eq.${id}`
-  );
-}
-
-export async function rejectPayment(id) {
-  return await db("payments", "PATCH",
-    { status: "rejected" },
-    `?id=eq.${id}`
-  );
-}
-
-// ─── BILLS ────────────────────────────────────────────────────────────────────
-export async function getBills(month, year) {
-  return await db("bills", "GET", null,
-    `?month=eq.${month}&year=eq.${year}&select=id,bill_number,customer_id,month,year,total_litres,month_amount,outstanding,total_amount,status,locked,customers(name,code,phone,address)`
-  );
-}
-
-export async function getCustomerBills(customerId) {
-  return await db("bills", "GET", null,
-    `?customer_id=eq.${customerId}&order=year.desc,month.desc&limit=12&select=*`
-  );
-}
-
-export async function updateBillStatus(id, status) {
-  return await db("bills", "PATCH", { status }, `?id=eq.${id}`);
-}
-
-// ─── SETTINGS ─────────────────────────────────────────────────────────────────
+// ─── SETTINGS ────────────────────────────────────────────────────────────────
 export async function getSetting(key) {
-  const rows = await db("settings", "GET", null, `?key=eq.${key}&limit=1&select=value`);
-  return rows?.[0]?.value || null;
+  const rows = await sb(`/settings?key=eq.${key}`);
+  return rows[0]?.value || null;
 }
-
 export async function setSetting(key, value) {
-  const existing = await db("settings", "GET", null, `?key=eq.${key}&limit=1`);
-  if (existing && existing.length > 0) {
-    return await db("settings", "PATCH", { value, updated_at: new Date().toISOString() }, `?key=eq.${key}`);
+  const existing = await sb(`/settings?key=eq.${key}`);
+  if (existing.length > 0) {
+    return sb(`/settings?key=eq.${key}`, {
+      method: "PATCH",
+      body: JSON.stringify({ value, updated_at: new Date().toISOString() }),
+    });
   }
-  return await db("settings", "POST", { key, value });
-}
-
-// ─── DISPUTES ─────────────────────────────────────────────────────────────────
-export async function getDisputes(customerId) {
-  const q = customerId
-    ? `?customer_id=eq.${customerId}&order=created_at.desc&select=*,customers(name,code)`
-    : `?order=created_at.desc&select=*,customers(name,code)`;
-  return await db("disputes", "GET", null, q);
-}
-
-export async function addDispute(data) {
-  return await db("disputes", "POST", {
-    customer_id: data.customer_id,
-    dispute_date: todayStr(),
-    issue: data.issue,
-    status: "open",
+  return sb("/settings", {
+    method: "POST",
+    body: JSON.stringify({ key, value }),
   });
 }
 
-export async function resolveDispute(id, resolution) {
-  return await db("disputes", "PATCH",
-    { status: "resolved", resolution, resolved_at: new Date().toISOString() },
-    `?id=eq.${id}`
-  );
+// ─── NOTIFICATION LOG ────────────────────────────────────────────────────────
+export async function logNotification(customer_id, type, message) {
+  return sb("/notification_log", {
+    method: "POST",
+    body: JSON.stringify({
+      customer_id,
+      type,
+      message,
+      sent_at: new Date().toISOString(),
+      status: "sent",
+    }),
+  });
+}
+
+// ─── BULK IMPORT ──────────────────────────────────────────────────────────────
+export async function bulkImportCustomers(rows, brands, areas, subgroups) {
+  const results = { success: 0, failed: 0, errors: [] };
+
+  for (const row of rows) {
+    try {
+      // Resolve group
+      let area_id = null;
+      if (row.group_name) {
+        let area = areas.find(
+          (a) => a.name.toLowerCase() === row.group_name.toLowerCase()
+        );
+        if (!area) {
+          const created = await addArea(row.group_name, row.delivery_boy || "");
+          area = created[0];
+          areas.push(area);
+        }
+        area_id = area.id;
+      }
+
+      // Resolve subgroup
+      let subgroup_id = null;
+      if (row.subgroup_name && area_id) {
+        let sg = subgroups.find(
+          (s) =>
+            s.name.toLowerCase() === row.subgroup_name.toLowerCase() &&
+            s.area_id === area_id
+        );
+        if (!sg) {
+          const created = await addSubgroup(area_id, row.subgroup_name);
+          sg = created[0];
+          subgroups.push(sg);
+        }
+        subgroup_id = sg.id;
+      }
+
+      // Resolve brand
+      let brand_id = null;
+      if (row.brand_name) {
+        const brand = brands.find(
+          (b) => b.name.toLowerCase() === row.brand_name.toLowerCase()
+        );
+        if (brand) brand_id = brand.id;
+      }
+
+      await addCustomer({
+        code: row.code,
+        name: row.name,
+        phone: row.phone || "",
+        address: row.address || "",
+        area_id,
+        subgroup_id,
+        brand_id,
+        default_qty: row.qty || 1,
+        custom_rate: row.rate || null,
+        credit_limit: row.credit_limit || 0,
+        outstanding: row.opening_balance || 0,
+      });
+      results.success++;
+    } catch (e) {
+      results.failed++;
+      results.errors.push(`Row ${row.code}: ${e.message}`);
+    }
+  }
+  return results;
 }
