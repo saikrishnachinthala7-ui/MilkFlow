@@ -5,7 +5,7 @@
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#1a2744",
+  "theme_color": "#1a6b3c",
   "orientation": "portrait",
   "icons": [
     {
@@ -29,7 +29,7 @@
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "Owner's Register",
+      "name": "Delivery Entry",
       "short_name": "Entry",
       "url": "/entry",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
