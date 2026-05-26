@@ -1,1783 +1,724 @@
-// MilkFlow — App.jsx — Complete v3.1 FINAL
-// All 18 pending changes + 5 features from v2.0 restored + config fixes
-
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { logo_app } from "./logoData.js";
-import * as DB from "./db.js";
+import { db, loadPins, PINS, getCustomers, addCustomer, updateCustomer, deactivateCustomer, deleteCustomer, getBrands, addBrand, updateBrand, deleteBrand, getTodayEntries, getDailyEntriesForDate, saveEntry, saveCustomerEntry, getPayments, addPayment, confirmPayment, rejectPayment, getBills, getMonthEntries, getSetting, setSetting, todayStr, getAreas, addArea, updateArea, deleteArea, getSubgroups, addSubgroup, updateSubgroup, deleteSubgroup, bulkImportCustomers } from "./db.js";
 
-// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+const UPI_ID = "yadaiahchinthala07-4@okaxis";
+const WHATSAPP_NUMBER = "919987073536";
 const OWNER_PIN = "1234";
 const FATHER_PIN = "0000";
-const BASE_URL = "https://milk-flow-beta.vercel.app";
-const UPI_ID = "yadaiahchinthala07-4@okaxis";
-const WA_NUMBER = "919987073536";
+const BASE_URL = window.location.origin;
+const QTY_OPTIONS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0];
+const AREA_COLORS = ["#1a6b3c","#1565C0","#6a1b9a","#c62828","#e65100"];
 
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
-function today() {
-  return new Date().toISOString().split("T")[0];
-}
-function fmtDate(d) {
-  if (!d) return "";
-  return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-}
-function fmtMonth(m, y) {
-  return new Date(y, m - 1, 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
-}
-function roomNum(code) {
-  return code ? code.replace(/[^0-9]/g, "") || code : "";
-}
-function getInitials(name) {
-  return name ? name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2) : "?";
-}
+const fmtCurrency = (n) => "₹" + Number(n || 0).toLocaleString("en-IN");
+const fmtDate = (d) => { if (!d) return ""; return new Date(d).toLocaleDateString("en-IN", { day:"2-digit", month:"short" }); };
+const monthLabel = (m, y) => { if (!m || !y) return ""; return new Date(y, m-1, 1).toLocaleDateString("en-IN", { month:"long", year:"numeric" }); };
+const initials = (name="") => name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+const avatarColor = (name="") => { const c=["#1a6b3c","#1565C0","#6a1b9a","#c62828","#e65100","#00695c","#f57f17"]; let h=0; for(let ch of name) h=(h*31+ch.charCodeAt(0))%c.length; return c[h]; };
+const nowDate = () => { const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
+const roomNum = (code="") => code.replace(/[^0-9]/g,"") || code;
 
-// ─── COLORS ──────────────────────────────────────────────────────────────────
-const C = {
-  navy: "#1a2744",
-  gold: "#c9a84c",
-  white: "#ffffff",
-  bg: "#f4f6fb",
-  card: "#ffffff",
-  border: "#e2e8f0",
-  text: "#1e293b",
-  muted: "#64748b",
-  success: "#16a34a",
-  danger: "#dc2626",
-  warning: "#d97706",
-  info: "#0ea5e9",
-};
-
-// ─── STYLES ──────────────────────────────────────────────────────────────────
-const S = {
-  page: { minHeight: "100vh", background: C.bg, fontFamily: "'Segoe UI', sans-serif", color: C.text },
-  card: { background: C.card, borderRadius: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.08)", padding: 16, marginBottom: 12 },
-  btn: (bg = C.navy, color = C.white) => ({
-    background: bg, color, border: "none", borderRadius: 8, padding: "10px 18px",
-    fontWeight: 700, cursor: "pointer", fontSize: 14, display: "inline-flex", alignItems: "center", gap: 6,
-  }),
-  btnSm: (bg = C.navy, color = C.white) => ({
-    background: bg, color, border: "none", borderRadius: 6, padding: "6px 12px",
-    fontWeight: 600, cursor: "pointer", fontSize: 12,
-  }),
-  input: {
-    width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}`,
-    fontSize: 14, boxSizing: "border-box", outline: "none",
-  },
-  label: { fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 4, display: "block" },
-  header: {
-    background: C.navy, color: C.white, padding: "12px 16px",
-    display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 100,
-  },
-  badge: (bg) => ({
-    background: bg, color: C.white, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700,
-  }),
-  avatar: (size = 42) => ({
-    width: size, height: size, borderRadius: "50%", background: C.gold, color: C.navy,
-    display: "flex", alignItems: "center", justifyContent: "center",
-    fontWeight: 800, fontSize: size > 36 ? 15 : 12, flexShrink: 0,
-  }),
-  modal: {
-    position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1000,
-    display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
-  },
-  modalBox: {
-    background: C.white, borderRadius: 16, padding: 24, width: "100%",
-    maxWidth: 480, maxHeight: "90vh", overflowY: "auto",
-  },
-};
-
-// ─── TOAST ───────────────────────────────────────────────────────────────────
-function Toast({ msg, type = "success", onClose }) {
-  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
-  const bg = type === "success" ? C.success : type === "error" ? C.danger : C.warning;
-  return (
-    <div style={{
-      position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
-      background: bg, color: "#fff", padding: "12px 20px", borderRadius: 10,
-      fontWeight: 600, zIndex: 9999, maxWidth: 320, textAlign: "center", fontSize: 14,
-    }}>{msg}</div>
-  );
-}
-function useToast() {
-  const [toast, setToast] = useState(null);
-  const show = (msg, type = "success") => setToast({ msg, type });
-  const el = toast ? <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} /> : null;
-  return [show, el];
-}
-
-// ─── PIN PAD (numeric keypad like phone) ─────────────────────────────────────
-function PinModal({ title, correctPin, onSuccess, onCancel }) {
-  const [pin, setPin] = useState("");
-  const [shake, setShake] = useState(false);
-  const [err, setErr] = useState("");
-
-  function press(d) {
-    if (pin.length >= 6) return;
-    const next = pin + d;
-    setPin(next);
-    if (next.length === correctPin.length) {
-      setTimeout(() => {
-        if (next === correctPin) {
-          onSuccess();
-        } else {
-          setShake(true);
-          setErr("Wrong PIN");
-          setTimeout(() => { setPin(""); setShake(false); setErr(""); }, 700);
-        }
-      }, 100);
-    }
-  }
-
-  function del() { setPin(p => p.slice(0, -1)); setErr(""); }
-
-  const keys = [
-    ["1","2","3"],
-    ["4","5","6"],
-    ["7","8","9"],
-    ["","0","⌫"],
-  ];
-
-  return (
-    <div style={S.modal}>
-      <div style={{ ...S.modalBox, maxWidth: 320, textAlign: "center" }}>
-        <img src={logo_app} alt="Logo" style={{ width: 56, height: 56, borderRadius: 12, marginBottom: 10 }} />
-        <div style={{ fontSize: 18, fontWeight: 800, color: C.navy, marginBottom: 4 }}>{title}</div>
-        <div style={{ fontSize: 13, color: C.muted, marginBottom: 20 }}>Enter your PIN to continue</div>
-
-        {/* PIN dots */}
-        <div style={{
-          display: "flex", justifyContent: "center", gap: 12, marginBottom: 8,
-          animation: shake ? "shake 0.4s ease" : "none",
-        }}>
-          {Array.from({ length: correctPin.length }).map((_, i) => (
-            <div key={i} style={{
-              width: 16, height: 16, borderRadius: "50%",
-              background: i < pin.length ? C.navy : C.border,
-              transition: "background 0.15s",
-            }} />
-          ))}
-        </div>
-
-        {err && <div style={{ color: C.danger, fontSize: 13, marginBottom: 8, fontWeight: 600 }}>{err}</div>}
-        {!err && <div style={{ height: 21, marginBottom: 0 }} />}
-
-        {/* Keypad */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
-          {keys.flat().map((k, i) => (
-            k === "" ? <div key={i} /> :
-            k === "⌫" ? (
-              <button key={i} onClick={del} style={{
-                background: C.border, border: "none", borderRadius: 12, padding: "16px 0",
-                fontSize: 18, cursor: "pointer", fontWeight: 700, color: C.muted,
-              }}>{k}</button>
-            ) : (
-              <button key={i} onClick={() => press(k)} style={{
-                background: "#f0f4ff", border: "none", borderRadius: 12, padding: "16px 0",
-                fontSize: 20, fontWeight: 700, cursor: "pointer", color: C.navy,
-                boxShadow: "0 2px 4px rgba(0,0,0,0.08)",
-              }}>{k}</button>
-            )
-          ))}
-        </div>
-
-        <button onClick={onCancel} style={{ ...S.btn(C.border, C.muted), width: "100%", justifyContent: "center", marginTop: 16 }}>
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── CUSTOMER FORM MODAL ──────────────────────────────────────────────────────
-function CustomerFormModal({ initial, areas, subgroups, brands, onSave, onCancel }) {
-  const isEdit = !!initial?.id;
-  const [form, setForm] = useState({
-    code: initial?.code || "",
-    name: initial?.name || "",
-    phone: initial?.phone || "",
-    address: initial?.address || "",
-    area_id: initial?.area_id || "",
-    subgroup_id: initial?.subgroup_id || "",
-    brand_id: initial?.brand_id || "",
-    default_qty: initial?.default_qty || 1,
-    custom_rate: initial?.custom_rate || "",
-    credit_limit: initial?.credit_limit || 0,
-    outstanding: initial?.outstanding || 0,
-  });
-  const [loading, setLoading] = useState(false);
-  const [codeWarning, setCodeWarning] = useState(false);
-
-  const filteredSubs = subgroups.filter(sg => sg.area_id === form.area_id);
-
-  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
-
-  async function save() {
-    if (!form.code.trim()) return alert("Customer code is required");
-    if (!form.name.trim()) return alert("Customer name is required");
-    setLoading(true);
-    try {
-      if (isEdit) await DB.updateCustomer(initial.id, form);
-      else await DB.addCustomer(form);
-      onSave();
-    } catch (e) { alert("Error: " + e.message); }
-    setLoading(false);
-  }
-
-  return (
-    <div style={S.modal}>
-      <div style={S.modalBox}>
-        <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>
-          {isEdit ? "✏️ Edit Customer" : "➕ Add Customer"}
-        </div>
-
-        <label style={S.label}>Customer Code / Room No. *</label>
-        <input style={{ ...S.input, marginBottom: 4 }} value={form.code}
-          onChange={e => { set("code", e.target.value); if (isEdit) setCodeWarning(true); }}
-          placeholder="e.g. C504 or C1002 (room number)" />
-        {codeWarning && (
-          <div style={{ color: C.warning, fontSize: 12, marginBottom: 8, padding: "6px 10px", background: "#fef3c7", borderRadius: 6 }}>
-            ⚠️ Changing code will change the customer portal link. Share new link with customer.
-          </div>
-        )}
-        {!codeWarning && <div style={{ height: 8 }} />}
-
-        <label style={S.label}>Full Name *</label>
-        <input style={{ ...S.input, marginBottom: 12 }} value={form.name}
-          onChange={e => set("name", e.target.value)} placeholder="Customer full name" />
-
-        <label style={S.label}>Phone (WhatsApp)</label>
-        <input style={{ ...S.input, marginBottom: 12 }} value={form.phone}
-          onChange={e => set("phone", e.target.value)} placeholder="10-digit mobile number" type="tel" />
-
-        <label style={S.label}>Group (Area / Delivery Zone)</label>
-        <select style={{ ...S.input, marginBottom: 12 }} value={form.area_id}
-          onChange={e => { set("area_id", e.target.value); set("subgroup_id", ""); }}>
-          <option value="">-- Select Group --</option>
-          {areas.map(a => <option key={a.id} value={a.id}>{a.name}{a.delivery_boy_name ? ` / ${a.delivery_boy_name}` : ""}</option>)}
-        </select>
-
-        <label style={S.label}>Subgroup (Building / Wing)</label>
-        <select style={{ ...S.input, marginBottom: 12 }} value={form.subgroup_id}
-          onChange={e => set("subgroup_id", e.target.value)} disabled={!form.area_id}>
-          <option value="">-- Select Subgroup --</option>
-          {filteredSubs.map(sg => <option key={sg.id} value={sg.id}>{sg.name}</option>)}
-        </select>
-
-        <label style={S.label}>Address / Notes</label>
-        <input style={{ ...S.input, marginBottom: 12 }} value={form.address}
-          onChange={e => set("address", e.target.value)} placeholder="Flat/building details" />
-
-        <label style={S.label}>Default Milk Brand</label>
-        <select style={{ ...S.input, marginBottom: 12 }} value={form.brand_id}
-          onChange={e => set("brand_id", e.target.value)}>
-          <option value="">-- Select Brand --</option>
-          {brands.map(b => <option key={b.id} value={b.id}>{b.name} (₹{b.rate}/L)</option>)}
-        </select>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-          <div>
-            <label style={S.label}>Default Qty (Litres/day)</label>
-            <input style={S.input} type="number" step="0.5" value={form.default_qty}
-              onChange={e => set("default_qty", e.target.value)} />
-          </div>
-          <div>
-            <label style={S.label}>Custom Rate (₹/L)</label>
-            <input style={S.input} type="number" value={form.custom_rate}
-              onChange={e => set("custom_rate", e.target.value)} placeholder="Leave blank = brand rate" />
-          </div>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
-          <div>
-            <label style={S.label}>Credit Limit (₹)</label>
-            <input style={S.input} type="number" value={form.credit_limit}
-              onChange={e => set("credit_limit", e.target.value)} />
-          </div>
-          <div>
-            <label style={S.label}>Opening Balance (₹)</label>
-            <input style={S.input} type="number" value={form.outstanding}
-              onChange={e => set("outstanding", e.target.value)} />
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button style={S.btn(C.muted)} onClick={onCancel}>Cancel</button>
-          <button style={S.btn(C.navy)} onClick={save} disabled={loading}>
-            {loading ? "Saving..." : isEdit ? "Save Changes" : "Add Customer"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── WHATSAPP HELPERS ─────────────────────────────────────────────────────────
-function waLink(phone, message) {
-  const clean = phone.replace(/\D/g, "");
-  const num = clean.startsWith("91") ? clean : `91${clean}`;
-  return `https://wa.me/${num}?text=${encodeURIComponent(message)}`;
-}
-
-function billWAMessage(customer, bill) {
-  const portalLink = `${BASE_URL}/c/${customer.code}`;
-  const month = fmtMonth(bill.month, bill.year);
-  return `🥛 Saikrishna Milk Supply
-Dear ${customer.name},
-
-Your ${month} milk bill is now ready.
-📋 Total Milk Supplied: ${bill.total_litres} Litres
-💰 Total Amount Due: ₹${bill.total_amount}
-
-👉 View your dashboard: ${portalLink}
-
-From your dashboard you can:
-• Record your daily milk from now onwards
-• View your detailed day-wise bill
-• Pay bills directly through the portal
-
-We are happy to introduce this new digital system to provide you with better service, transparency, and convenience.
-
-Thank you for your continued trust and support 🙏
-
-UPI: ${UPI_ID}
-After paying, please share payment screenshot on WhatsApp to confirm ✅`;
-}
-
-// ─── TTS ─────────────────────────────────────────────────────────────────────
 function speak(text) {
   if (!window.speechSynthesis) return;
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = "en-IN";
-  u.rate = 0.9;
+  u.lang = "en-IN"; u.rate = 0.9;
   window.speechSynthesis.speak(u);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DEV SCREEN (/)
-// ═══════════════════════════════════════════════════════════════════════════════
-function DevScreen() {
-  const [portalCode, setPortalCode] = useState("");
-  return (
-    <div style={{ ...S.page, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", padding: 24 }}>
-      <img src={logo_app} alt="Logo" style={{ width: 84, height: 84, borderRadius: 18, marginBottom: 16, boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }} />
-      <div style={{ fontSize: 24, fontWeight: 800, color: C.navy, marginBottom: 2 }}>MilkFlow</div>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 36 }}>Saikrishna Milk Supply</div>
+function getRoute() {
+  const path = window.location.pathname;
+  const p = new URLSearchParams(window.location.search);
+  if (path==="/owner"||p.get("role")==="owner") return {role:"owner"};
+  if (path==="/entry"||p.get("role")==="father") return {role:"father"};
+  if (path.startsWith("/c/")) return {role:"customer",code:path.split("/c/")[1]};
+  if (path.startsWith("/bill/")) return {role:"bill",code:path.split("/bill/")[1]};
+  return {role:"select"};
+}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "100%", maxWidth: 320 }}>
-        <a href="/owner" style={{ textDecoration: "none" }}>
-          <button style={{ ...S.btn(C.navy), width: "100%", justifyContent: "center", padding: "16px 18px", fontSize: 16 }}>
-            👑 Owner Portal
-          </button>
-        </a>
-        <a href="/entry" style={{ textDecoration: "none" }}>
-          <button style={{ ...S.btn(C.gold, C.navy), width: "100%", justifyContent: "center", padding: "16px 18px", fontSize: 16 }}>
-            📦 Owner's Register
-          </button>
-        </a>
+const Loader = () => <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:40,fontSize:32}}>⏳</div>;
+const EmptyState = ({icon,message}) => <div style={{textAlign:"center",padding:40,color:"#888"}}><div style={{fontSize:40,marginBottom:8}}>{icon}</div><div style={{fontSize:14}}>{message}</div></div>;
+const StatCard = ({label,value,icon,color}) => <div style={S.statCard}><div style={{fontSize:20,marginBottom:4}}>{icon}</div><div style={{fontSize:17,fontWeight:700,color}}>{value}</div><div style={{fontSize:11,color:"#888",marginTop:2}}>{label}</div></div>;
+const Chip = ({bg,color,label}) => <div style={{flex:1,background:bg,color,borderRadius:20,padding:"6px 0",textAlign:"center",fontSize:11,fontWeight:500}}>{label}</div>;
+const Avatar = ({name,size=44}) => <div style={{width:size,height:size,borderRadius:"50%",background:avatarColor(name),display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.32,fontWeight:600,color:"white",flexShrink:0}}>{initials(name)}</div>;
 
-        <div style={{ ...S.card, marginTop: 8 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: C.navy }}>🔗 Test Customer Portal</div>
-          <input style={{ ...S.input, marginBottom: 8 }} value={portalCode}
-            onChange={e => setPortalCode(e.target.value)}
-            placeholder="Enter customer code e.g. C504" />
-          <button style={{ ...S.btn(C.info), width: "100%", justifyContent: "center" }}
-            onClick={() => { if (portalCode.trim()) window.location.href = `/c/${portalCode.trim()}`; }}>
-            Open Portal
-          </button>
-        </div>
+function PinScreen({onSuccess,role}) {
+  const [pin,setPin]=useState(""); const [error,setError]=useState(false); const [shake,setShake]=useState(false);
+  const correctPin = role==="father" ? FATHER_PIN : OWNER_PIN;
+  const press=(d)=>{
+    if(pin.length>=4)return; const next=pin+d; setPin(next); setError(false);
+    if(next.length===4){setTimeout(()=>{if(next===correctPin){onSuccess();}else{setShake(true);setError(true);setPin("");setTimeout(()=>setShake(false),500);}},150);}
+  };
+  return(
+    <div style={S.pinWrap}>
+      <img src={logo_app} style={{width:90,height:90,borderRadius:16,objectFit:"contain",marginBottom:4}} alt="logo"/>
+      <div style={S.pinTitle}>Saikrishna Milk Supply</div>
+      <div style={{background:role==="father"?"#e8f5ee":"#e8eaf6",color:role==="father"?"#1a6b3c":"#3949ab",padding:"5px 16px",borderRadius:20,fontSize:13,fontWeight:500,marginBottom:20}}>{role==="father"?"🥛 Owner's Register":"👑 Owner Login"}</div>
+      <div style={{...S.pinDots,...(shake?{animation:"shake 0.4s"}:{})}}>{[0,1,2,3].map(i=><div key={i} style={{...S.pinDot,...(i<pin.length?S.pinDotFilled:{})}}/>)}</div>
+      {error&&<div style={{color:"#c0392b",fontSize:13}}>❌ Wrong PIN — try again</div>}
+      <div style={S.pinPad}>
+        {[1,2,3,4,5,6,7,8,9].map(n=><button key={n} style={S.pinBtn} onClick={()=>press(String(n))}>{n}</button>)}
+        <div style={S.pinBtn}/><button style={S.pinBtn} onClick={()=>press("0")}>0</button>
+        <button style={S.pinBtn} onClick={()=>setPin(p=>p.slice(0,-1))}>⌫</button>
       </div>
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// OWNER PORTAL (/owner)
-// ═══════════════════════════════════════════════════════════════════════════════
-function OwnerPortal() {
-  const [authed, setAuthed] = useState(false);
-  const [tab, setTab] = useState("dashboard");
-  const [show, toast] = useToast();
-
-  if (!authed) return (
-    <PinModal title="Owner Login" correctPin={OWNER_PIN}
-      onSuccess={() => setAuthed(true)} onCancel={() => window.location.href = "/"} />
-  );
-
-  const tabs = [
-    { id: "dashboard", label: "📊", title: "Dashboard" },
-    { id: "customers", label: "👥", title: "Customers" },
-    { id: "entry", label: "📝", title: "Entries" },
-    { id: "bills", label: "🧾", title: "Bills" },
-    { id: "payments", label: "💰", title: "Payments" },
-    { id: "reports", label: "📈", title: "Reports" },
-    { id: "settings", label: "⚙️", title: "Settings" },
-  ];
-
-  return (
-    <div style={S.page}>
-      <div style={S.header}>
-        <img src={logo_app} alt="Logo" style={{ width: 32, height: 32, borderRadius: 6 }} />
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>Saikrishna Milk Supply</div>
-          <div style={{ fontSize: 11, opacity: 0.7 }}>Owner Portal</div>
-        </div>
-      </div>
-
-      <div style={{ display: "flex", borderBottom: `2px solid ${C.border}`, background: C.white, overflowX: "auto" }}>
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} style={{
-            flex: 1, minWidth: 48, padding: "10px 2px", border: "none", background: "none",
-            cursor: "pointer", fontSize: 17, borderBottom: tab === t.id ? `3px solid ${C.navy}` : "3px solid transparent",
-            color: tab === t.id ? C.navy : C.muted,
-          }} title={t.title}>{t.label}</button>
-        ))}
-      </div>
-
-      <div style={{ padding: 16 }}>
-        {tab === "dashboard" && <OwnerDashboard show={show} />}
-        {tab === "customers" && <OwnerCustomers show={show} />}
-        {tab === "entry" && <OwnerEntry show={show} />}
-        {tab === "bills" && <OwnerBills show={show} />}
-        {tab === "payments" && <OwnerPayments show={show} />}
-        {tab === "reports" && <OwnerReports show={show} />}
-        {tab === "settings" && <OwnerSettings show={show} />}
-      </div>
-      {toast}
-    </div>
-  );
-}
-
-// ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function OwnerDashboard({ show }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => { load(); }, []);
-
-  async function load() {
+function FatherScreen() {
+  const [customers,setCustomers]=useState([]); const [brands,setBrands]=useState([]); const [entries,setEntries]=useState({});
+  const [areas,setAreas]=useState([]); const [subgroups,setSubgroups]=useState([]);
+  const [active,setActive]=useState(null); const [selectedQty,setSelectedQty]=useState(null); const [customQty,setCustomQty]=useState("");
+  const [filter,setFilter]=useState("all"); const [search,setSearch]=useState(""); const [submitted,setSubmitted]=useState(false);
+  const [loading,setLoading]=useState(true); const [saving,setSaving]=useState(false);
+  useEffect(()=>{loadData();},[]);
+  const loadData=async()=>{
     setLoading(true);
-    try {
-      const [customers, entries, payments, bills] = await Promise.all([
-        DB.getActiveCustomers(), DB.getDailyEntries(today()),
-        DB.getPendingPayments(), DB.getBills(),
-      ]);
-      const totalActual = entries.reduce((s, e) => s + (e.quantity || 0), 0);
-      const totalDefault = customers.reduce((s, c) => s + (c.default_qty || 0), 0);
-      const isActual = entries.length > 0;
-      const pendingAmt = payments.reduce((s, p) => s + (p.amount || 0), 0);
-      const unpaidBills = bills.filter(b => b.status === "unpaid" || b.status === "partial");
-      const totalDue = unpaidBills.reduce((s, b) => s + (b.total_amount || 0), 0);
-      setData({ customers, entries, payments, totalActual, totalDefault, isActual, pendingAmt, totalDue });
-    } catch (e) { show("Failed to load dashboard", "error"); }
+    try{
+      const [custs,brandsData,todayE,areasData,sgsData]=await Promise.all([getCustomers(),getBrands(),getTodayEntries(),getAreas(),getSubgroups()]);
+      setCustomers(custs||[]); setBrands(brandsData||[]); setAreas(areasData||[]); setSubgroups(sgsData||[]);
+      const map={}; (todayE||[]).forEach(e=>{map[e.customer_id]=e;}); setEntries(map);
+    }catch(e){console.error(e);setCustomers([]);}
     setLoading(false);
-  }
-
-  if (loading) return <div style={{ textAlign: "center", padding: 40, color: C.muted }}>Loading...</div>;
-  if (!data) return null;
-
-  const Stat = ({ label, value, color, sub }) => (
-    <div style={{ ...S.card, textAlign: "center", flex: 1, marginBottom: 0 }}>
-      <div style={{ fontSize: 22, fontWeight: 800, color: color || C.navy }}>{value}</div>
-      <div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{label}</div>
-      {sub && <div style={{ fontSize: 11, color: C.warning, marginTop: 2 }}>{sub}</div>}
-    </div>
-  );
-
-  return (
-    <div>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>📅 {fmtDate(today())}</div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-        <Stat label="Active Customers" value={data.customers.length} color={C.navy} />
-        <Stat label="Milk Today"
-          value={`${data.isActual ? data.totalActual : data.totalDefault}L`}
-          color={C.success}
-          sub={data.isActual ? "✅ Actual delivered" : "📋 Planned (no entries yet)"} />
-      </div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
-        <Stat label="Pending Payments" value={`₹${data.pendingAmt}`} color={C.warning} />
-        <Stat label="Total Outstanding" value={`₹${data.totalDue}`} color={C.danger} />
-      </div>
-
-      {data.payments.length > 0 && (
-        <div style={S.card}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>⏳ Pending Confirmations</div>
-          {data.payments.slice(0, 3).map(p => (
-            <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
-              <span style={{ fontSize: 13 }}>{p.customers?.name}</span>
-              <span style={{ fontWeight: 700, color: C.warning }}>₹{p.amount}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Inactive customers alert */}
-      <InactiveCustomersAlert customers={data.customers} entries={data.entries} />
-    </div>
-  );
-}
-
-function InactiveCustomersAlert({ customers, entries }) {
-  const [inactive, setInactive] = useState([]);
-
-  useEffect(() => {
-    async function check() {
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-      const cutoff = sevenDaysAgo.toISOString().split("T")[0];
-      const inactiveList = [];
-      for (const c of customers) {
-        try {
-          const recent = await DB.getDailyEntriesForCustomer(c.id);
-          const hasRecent = recent.some(e => e.entry_date >= cutoff);
-          if (!hasRecent) inactiveList.push(c);
-        } catch {}
-      }
-      setInactive(inactiveList);
-    }
-    if (customers.length > 0) check();
-  }, [customers]);
-
-  if (inactive.length === 0) return null;
-
-  return (
-    <div style={{ ...S.card, background: "#fff8ed", border: `1px solid ${C.warning}` }}>
-      <div style={{ fontWeight: 700, color: C.warning, marginBottom: 8 }}>
-        ⚠️ {inactive.length} Customer(s) — No Delivery in 7+ Days
-      </div>
-      {inactive.map(c => (
-        <div key={c.id} style={{ fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
-          <span>{c.name}</span>
-          <span style={{ color: C.muted }}>{c.code}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─── CUSTOMERS ────────────────────────────────────────────────────────────────
-function OwnerCustomers({ show }) {
-  const [customers, setCustomers] = useState([]);
-  const [areas, setAreas] = useState([]);
-  const [subgroups, setSubgroups] = useState([]);
-  const [brands, setBrands] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [editCustomer, setEditCustomer] = useState(null);
-  const [showPin, setShowPin] = useState(false);
-  const [pinAction, setPinAction] = useState(null);
-  const [search, setSearch] = useState("");
-  const [showImport, setShowImport] = useState(false);
-
-  useEffect(() => { load(); }, []);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const [c, a, sg, b] = await Promise.all([DB.getCustomers(), DB.getAreas(), DB.getSubgroups(), DB.getBrands()]);
-      setCustomers(c); setAreas(a); setSubgroups(sg); setBrands(b);
-    } catch (e) { show("Failed to load", "error"); }
-    setLoading(false);
-  }
-
-  function triggerDelete(customer, type) {
-    setPinAction(() => async () => {
-      try {
-        if (type === "deactivate") await DB.deactivateCustomer(customer.id);
-        else await DB.deleteCustomer(customer.id);
-        show(`Customer ${type === "deactivate" ? "deactivated" : "deleted"}`, "success");
-        load();
-      } catch (e) { show("Error: " + e.message, "error"); }
-    });
-    setShowPin(true);
-  }
-
-  const filtered = customers.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.code.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const grouped = {};
-  filtered.forEach(c => {
-    const aKey = c.area_id || "none";
-    const aLabel = c.areas?.name || "No Group";
-    const sgKey = c.subgroup_id || "none";
-    const sgLabel = c.subgroups?.name || "No Subgroup";
-    if (!grouped[aKey]) grouped[aKey] = { label: aLabel, subs: {} };
-    if (!grouped[aKey].subs[sgKey]) grouped[aKey].subs[sgKey] = { label: sgLabel, customers: [] };
+  };
+  const doSave=async()=>{
+    let qty; if(selectedQty===-1){qty=parseFloat(customQty);if(isNaN(qty)||qty<0)return;}else if(selectedQty===null)return;else qty=selectedQty;
+    setSaving(true);
+    try{const brand=brands.find(b=>b.id===active.brand_id);const rate=active.custom_rate||brand?.rate||0;await saveEntry(active.id,qty,active.brand_id,rate);setEntries(p=>({...p,[active.id]:{customer_id:active.id,quantity:qty}}));setActive(null);}
+    catch(e){alert("Save failed: "+e.message);}
+    setSaving(false);
+  };
+  const doneCount=Object.keys(entries).length; const allDone=customers.length>0&&doneCount>=customers.length;
+  const filtered=customers.filter(c=>{const e=entries[c.id];if(filter==="done"&&!e)return false;if(filter==="pending"&&e)return false;const s=search.toLowerCase();return !s||(c.name||"").toLowerCase().includes(s)||(c.code||"").toLowerCase().includes(s);});
+  const grouped={};
+  filtered.forEach(c=>{
+    const area=areas.find(a=>a.id===c.area_id); const sg=subgroups.find(s=>s.id===c.subgroup_id);
+    const aKey=area?.id||"none"; const aLabel=area?`${area.name}${area.delivery_boy_name?" / "+area.delivery_boy_name:""}`:"Other";
+    const sgKey=sg?.id||"none"; const sgLabel=sg?.name||"Other";
+    if(!grouped[aKey])grouped[aKey]={label:aLabel,area,subs:{}};
+    if(!grouped[aKey].subs[sgKey])grouped[aKey].subs[sgKey]={label:sgLabel,sg,customers:[]};
     grouped[aKey].subs[sgKey].customers.push(c);
   });
-
-  if (loading) return <div style={{ textAlign: "center", padding: 40 }}>Loading...</div>;
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <button style={S.btn(C.navy)} onClick={() => { setEditCustomer(null); setShowForm(true); }}>➕ Add Customer</button>
-        <button style={S.btn(C.gold, C.navy)} onClick={() => setShowImport(true)}>📥 Import Excel</button>
-      </div>
-
-      <input style={{ ...S.input, marginBottom: 12 }} value={search}
-        onChange={e => setSearch(e.target.value)} placeholder="🔍 Search by name or code..." />
-
-      {customers.length === 0 ? (
-        <div style={{ ...S.card, textAlign: "center", color: C.muted, padding: 40 }}>No customers yet.</div>
-      ) : (
-        Object.entries(grouped).map(([aKey, group]) => (
-          <div key={aKey} style={{ marginBottom: 16 }}>
-            <div style={{ background: C.navy, color: C.white, padding: "9px 14px", borderRadius: "8px 8px 0 0", fontWeight: 800, fontSize: 15 }}>
-              📍 {group.label}
-            </div>
-            {Object.entries(group.subs).map(([sgKey, sub]) => (
-              <div key={sgKey} style={{ border: `1px solid ${C.border}`, borderTop: "none" }}>
-                <div style={{ background: "#f0f4ff", padding: "7px 14px", fontWeight: 700, fontSize: 14, color: C.navy, borderBottom: `1px solid ${C.border}` }}>
-                  🏢 {sub.label}
-                </div>
-                {sub.customers.map(c => (
-                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: `1px solid ${C.border}`, background: c.active ? C.white : "#fff5f5" }}>
-                    <div style={S.avatar(40)}>{roomNum(c.code) || getInitials(c.name)}</div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}>{c.name}</div>
-                      <div style={{ fontSize: 12, color: C.muted }}>{c.code} · {c.phone}</div>
-                      {!c.active && <span style={S.badge(C.danger)}>Inactive</span>}
+  if(submitted)return(<div style={S.successScreen}><div style={{fontSize:72}}>✅</div><div style={{fontSize:24,fontWeight:600,color:"#1a6b3c"}}>All Submitted!</div><div style={{display:"flex",gap:16,marginTop:12}}><div style={S.statBox}><div style={S.statBoxNum}>{customers.length}</div><div style={S.statBoxLabel}>Customers</div></div><div style={S.statBox}><div style={S.statBoxNum}>{Object.values(entries).reduce((s,e)=>s+(e?.quantity||0),0).toFixed(1)}</div><div style={S.statBoxLabel}>Litres</div></div></div><button style={{...S.btnSave,marginTop:24,padding:"12px 32px"}} onClick={()=>{setSubmitted(false);setEntries({});loadData();}}>New Day</button></div>);
+  if(loading)return <Loader/>;
+  return(
+    <div style={S.screen}>
+      <div style={S.statusBar}><Chip bg="#e8f5ee" color="#1a6b3c" label={`✅ ${doneCount}/${customers.length} Done`}/><Chip bg="#fff3cd" color="#856404" label={`⏳ ${customers.length-doneCount} Left`}/><Chip bg={allDone?"#d4edda":"#e9ecef"} color={allDone?"#155724":"#495057"} label={`${Math.round(doneCount/Math.max(customers.length,1)*100)}%`}/></div>
+      <div style={S.searchBar}><span style={{color:"#888"}}>🔍</span><input style={S.searchInput} placeholder="Search customer..." value={search} onChange={e=>setSearch(e.target.value)}/>{search&&<button style={S.clearBtn} onClick={()=>setSearch("")}>✕</button>}</div>
+      <div style={S.filterRow}>{[["all",`All (${customers.length})`],["pending",`Pending (${customers.length-doneCount})`],["done",`Done (${doneCount})`]].map(([f,l])=>(<button key={f} style={{...S.filterChip,...(filter===f?S.filterChipActive:{})}} onClick={()=>setFilter(f)}>{l}</button>))}</div>
+      <div style={S.scrollArea}>
+        {customers.length===0?<EmptyState icon="👥" message="No customers yet. Add from Owner Dashboard."/>:
+        Object.values(grouped).map((group,gi)=>(
+          <div key={group.label}>
+            <div style={{background:"#1a2744",color:"white",padding:"9px 12px",fontWeight:700,fontSize:15,marginTop:gi>0?8:0}}>📍 {group.label}</div>
+            {Object.values(group.subs).map(sub=>(
+              <div key={sub.label}>
+                <div style={{background:"#eef2ff",color:"#1a2744",padding:"7px 12px",fontWeight:600,fontSize:14,borderBottom:"0.5px solid #ddd"}}>🏢 {sub.label}</div>
+                {sub.customers.map(cust=>{
+                  const entry=entries[cust.id]; const isDone=!!entry;
+                  const qty=isDone?entry.quantity:(cust.default_qty||1);
+                  const brand=brands.find(b=>b.id===cust.brand_id);
+                  const room=roomNum(cust.code);
+                  const ttsText=`${group.area?.name||""} - ${sub.sg?.name||""} - ${room||cust.name}`;
+                  return(
+                    <div key={cust.id} style={{...S.custCard,...(isDone?S.custCardDone:{})}} onClick={()=>{setActive(cust);setSelectedQty(isDone?entry.quantity:null);setCustomQty("");}}>
+                      <div style={{width:44,height:44,borderRadius:"50%",background:avatarColor(cust.name),display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:"white",flexShrink:0}}>{room||initials(cust.name)}</div>
+                      <div style={S.custInfo}>
+                        <div style={{display:"flex",alignItems:"center",gap:4}}>
+                          <div style={S.custName}>{cust.name}</div>
+                          <button style={{background:"none",border:"none",fontSize:15,cursor:"pointer",padding:"0 2px",lineHeight:1}} onClick={e=>{e.stopPropagation();speak(ttsText);}}>🔊</button>
+                        </div>
+                        <div style={S.custMeta}>{cust.code} • {brand?.name||"—"}</div>
+                      </div>
+                      <div style={S.qtySection}>
+                        {entry?.quantity===0?<><div style={{fontSize:20}}>🚫</div><div style={S.qtyUnit}>No Delivery</div></>:<><div style={S.qtyNum}>{qty}</div><div style={S.qtyUnit}>Litres</div></>}
+                        <div style={{...S.qtyBadge,...(isDone?S.qtyBadgeDone:S.qtyBadgePrev)}}>{isDone?"✓ Saved":"Default"}</div>
+                      </div>
                     </div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                      <button style={S.btnSm(C.info)} title="Send WhatsApp" onClick={() => {
-                        window.open(waLink(c.phone, `Hi ${c.name}, your MilkFlow portal: ${BASE_URL}/c/${c.code}`), "_blank");
-                      }}>💬</button>
-                      <button style={S.btnSm(C.gold, C.navy)} title="Edit" onClick={() => { setEditCustomer(c); setShowForm(true); }}>✏️</button>
-                      <button style={S.btnSm(C.warning)} title="Deactivate" onClick={() => triggerDelete(c, "deactivate")}>⏸</button>
-                      <button style={S.btnSm(C.danger)} title="Delete" onClick={() => triggerDelete(c, "delete")}>🗑</button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </div>
-        ))
-      )}
-
-      {showForm && (
-        <CustomerFormModal initial={editCustomer} areas={areas} subgroups={subgroups} brands={brands}
-          onSave={() => { setShowForm(false); setEditCustomer(null); load(); show("Customer saved!"); }}
-          onCancel={() => { setShowForm(false); setEditCustomer(null); }} />
-      )}
-
-      {showPin && (
-        <PinModal title="Confirm Action" correctPin={OWNER_PIN}
-          onSuccess={() => { setShowPin(false); pinAction && pinAction(); }}
-          onCancel={() => setShowPin(false)} />
-      )}
-
-      {showImport && (
-        <ImportModal areas={areas} subgroups={subgroups} brands={brands}
-          onDone={() => { setShowImport(false); load(); }}
-          onCancel={() => setShowImport(false)} show={show} />
-      )}
+        ))}
+        {filtered.length===0&&customers.length>0&&<EmptyState icon="🔍" message="No customers found"/>}
+      </div>
+      <button style={{...S.submitBtn,...(allDone?{}:S.submitBtnDisabled)}} onClick={allDone?()=>setSubmitted(true):null}><span style={{fontSize:22}}>{allDone?"🚀":"🔒"}</span>{allDone?"Submit All Records":`${customers.length-doneCount} remaining — complete first`}</button>
+      {active&&(<div style={S.modalBg} onClick={()=>setActive(null)}><div style={S.modal} onClick={e=>e.stopPropagation()}><div style={S.modalHandle}/><div style={S.modalName}>{active.name}</div><div style={S.modalMeta}>{active.code} • {brands.find(b=>b.id===active.brand_id)?.name||"—"}</div><div style={S.prevBox}><span style={{fontSize:13,color:"#2d7a50"}}>Default:</span><span style={{fontSize:18,fontWeight:600,color:"#1a6b3c"}}>{active.default_qty||1} L</span></div><div style={{fontSize:13,color:"#888",marginBottom:10,textAlign:"center"}}>How many litres today? 👇</div><div style={S.qtyGrid}>{QTY_OPTIONS.map(q=><button key={q} style={{...S.qtyOption,...(selectedQty===q?S.qtyOptionSel:{})}} onClick={()=>{setSelectedQty(q);setCustomQty("");}}>{q}</button>)}<button style={{...S.qtyOption,...(selectedQty===0?S.qtyOptionSel:{}),color:"#c0392b",borderColor:"#f5c6cb",background:"#fdf2f3",fontSize:13}} onClick={()=>{setSelectedQty(0);setCustomQty("");}}>🚫<br/><span style={{fontSize:10}}>None</span></button><button style={{...S.qtyOption,...(selectedQty===-1?S.qtyOptionSel:{}),fontSize:13}} onClick={()=>setSelectedQty(-1)}>✏️<br/><span style={{fontSize:10}}>Other</span></button></div>{selectedQty===-1&&(<div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}><input type="number" step="0.5" min="0" placeholder="0.0" value={customQty} onChange={e=>setCustomQty(e.target.value)} style={{flex:1,fontSize:18,padding:"10px 14px",border:"0.5px solid #ddd",borderRadius:10,background:"white",color:"#111"}} autoFocus/><span style={{fontSize:13,color:"#888"}}>Litres</span></div>)}<div style={S.modalActions}><button style={S.btnCancel} onClick={()=>setActive(null)}>Cancel</button><button style={S.btnSave} onClick={doSave} disabled={saving}>{saving?"Saving...":"✅ Save"}</button></div></div></div>)}
     </div>
   );
 }
 
-// ─── BULK IMPORT ──────────────────────────────────────────────────────────────
-function ImportModal({ areas, subgroups, brands, onDone, onCancel, show }) {
-  const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const COLS = ["code","name","phone","address","group_name","subgroup_name","brand_name","qty","rate","opening_balance"];
+function OwnerDashboard() {
+  const [tab,setTab]=useState("home");
+  const tabs=[["home","🏠","Home"],["customers","👥","Customers"],["records","📋","Records"],["billing","🧾","Billing"],["payments","💳","Payments"],["reports","📊","Reports"],["settings","⚙️","Settings"]];
+  return(<div style={S.screen}><div style={{flex:1,overflowY:"auto"}}>{tab==="home"&&<OwnerHome setTab={setTab}/>}{tab==="customers"&&<CustomerManagement/>}{tab==="records"&&<DailyRecords/>}{tab==="billing"&&<BillingSection/>}{tab==="payments"&&<PaymentTracking/>}{tab==="reports"&&<ReportsSection/>}{tab==="settings"&&<OwnerSettings/>}</div><div style={{...S.bottomNav,overflowX:"auto"}}>{tabs.map(([id,icon,label])=>(<button key={id} style={{...S.navBtn,minWidth:46,...(tab===id?S.navBtnActive:{})}} onClick={()=>setTab(id)}><span style={{fontSize:18}}>{icon}</span><span style={{fontSize:9,marginTop:2}}>{label}</span></button>))}</div></div>);
+}
 
-  function downloadTemplate() {
-    const csv = COLS.join(",") + "\n" +
-      "C504,John Doe,9876543210,Flat 504,JB Nagar,Sumit A Wing,Amul Full Cream,1,68,0\n" +
-      "C505,Jane Smith,9876543211,Flat 505,JB Nagar,Sumit A Wing,Nandini,1.5,56,200";
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    a.download = "milkflow_import_template.csv";
-    a.click();
-  }
-
-  function parseCSV(text) {
-    const lines = text.trim().split("\n");
-    const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
-    return lines.slice(1).map(line => {
-      const vals = line.split(",");
-      const row = {};
-      headers.forEach((h, i) => row[h] = vals[i]?.trim() || "");
-      return row;
-    });
-  }
-
-  function handleFile(e) {
-    const f = e.target.files[0]; if (!f) return;
-    setFile(f);
-    const reader = new FileReader();
-    reader.onload = ev => setPreview(parseCSV(ev.target.result).slice(0, 5));
-    reader.readAsText(f);
-  }
-
-  async function doImport() {
-    if (!file) return;
+function OwnerHome({setTab}) {
+  const [stats,setStats]=useState(null); const [loading,setLoading]=useState(true);
+  useEffect(()=>{loadStats();},[]);
+  const loadStats=async()=>{
     setLoading(true);
-    const reader = new FileReader();
-    reader.onload = async ev => {
-      const rows = parseCSV(ev.target.result);
-      const res = await DB.bulkImportCustomers(rows, brands, [...areas], [...subgroups]);
-      setResult(res);
-      setLoading(false);
-      if (res.success > 0) show(`Imported ${res.success} customers`, "success");
-    };
-    reader.readAsText(file);
-  }
+    try{
+      const now=new Date();
+      const [custs,todayE,pendingP]=await Promise.all([
+        db("customers","GET",null,"?active=eq.true&select=id,default_qty"),
+        getTodayEntries(),
+        db("payments","GET",null,"?status=eq.pending_confirmation&select=id"),
+      ]);
+      const actualLitres=(todayE||[]).reduce((s,e)=>s+(parseFloat(e.quantity)||0),0);
+      const plannedLitres=(custs||[]).reduce((s,c)=>s+(parseFloat(c.default_qty)||0),0);
+      const hasActual=(todayE||[]).length>0;
+      setStats({customers:custs?.length||0,todayLitres:hasActual?actualLitres:plannedLitres,hasActual,pendingPayments:(pendingP||[]).length,day:now.getDate(),daysInMonth:new Date(now.getFullYear(),now.getMonth()+1,0).getDate()});
+    }catch{setStats({customers:0,todayLitres:0,hasActual:false,pendingPayments:0,day:new Date().getDate(),daysInMonth:30});}
+    setLoading(false);
+  };
+  const hr=new Date().getHours(); const greeting=hr<12?"Good Morning":hr<17?"Good Afternoon":"Good Evening"; const now=new Date();
+  return(<div style={{padding:16}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}><div><div style={{fontSize:13,color:"#888"}}>{greeting} 👋</div><div style={{fontSize:18,fontWeight:600}}>Saikrishna Milk Supply</div><div style={{fontSize:12,color:"#888"}}>{now.toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})}</div></div><img src={logo_app} style={{width:44,height:44,borderRadius:10,objectFit:"contain"}} alt="logo"/></div>
+    {loading?<Loader/>:<><div style={S.sectionTitle}>📊 Today</div><div style={S.statsGrid}><StatCard label="Active Customers" value={stats.customers} icon="👥" color="#1565C0"/><StatCard label="Litres Today" value={stats.todayLitres.toFixed(1)+"L"+(stats.hasActual?" ✅":" 📋")} icon="🥛" color="#1a6b3c"/><StatCard label="Pending Payments" value={stats.pendingPayments} icon="⏳" color={stats.pendingPayments>0?"#c62828":"#1a6b3c"}/><StatCard label="Month Progress" value={`${stats.day}/${stats.daysInMonth}`} icon="📅" color="#6a1b9a"/></div><div style={S.sectionTitle}>⚡ Quick Actions</div><div style={{display:"flex",gap:10,marginBottom:16}}>{[["🧾","Billing","billing"],["💳","Payments","payments"],["📋","Records","records"],["👥","Customers","customers"]].map(([icon,label,t])=>(<button key={t} style={{flex:1,background:"white",border:"1px solid #eee",borderRadius:12,padding:"12px 6px",display:"flex",flexDirection:"column",alignItems:"center",gap:5,cursor:"pointer"}} onClick={()=>setTab(t)}><span style={{fontSize:24}}>{icon}</span><span style={{fontSize:11,color:"#555",fontWeight:500}}>{label}</span></button>))}</div>{stats.pendingPayments>0&&<div style={S.alertBox}><span style={{fontSize:20}}>⚠️</span><div><div style={{fontWeight:500,fontSize:14}}>{stats.pendingPayments} payment{stats.pendingPayments>1?"s":""} waiting</div><div style={{fontSize:12,color:"#856404"}}>Tap Payments to review</div></div></div>}<div style={S.sectionTitle}>🗓️ This Month</div><div style={{background:"white",border:"0.5px solid #eee",borderRadius:12,padding:"14px 16px"}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,color:"#555"}}>Days recorded</span><span style={{fontWeight:600}}>{stats.day}/{stats.daysInMonth}</span></div><div style={{background:"#eee",borderRadius:4,height:8}}><div style={{background:"#1a6b3c",borderRadius:4,height:"100%",width:`${(stats.day/stats.daysInMonth)*100}%`}}/></div></div></>}
+  </div>);
+}
 
-  return (
-    <div style={S.modal}>
-      <div style={S.modalBox}>
-        <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>📥 Bulk Import Customers</div>
-        <div style={{ background: "#f0f4ff", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13 }}>
-          <strong>CSV Columns:</strong>
-          <div style={{ fontFamily: "monospace", fontSize: 11, marginTop: 4, color: C.muted, wordBreak: "break-all" }}>{COLS.join(" | ")}</div>
-          <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.6 }}>
-            • <strong>group_name</strong> and <strong>subgroup_name</strong> auto-created if not found<br />
-            • <strong>brand_name</strong> must match exactly<br />
-            • <strong>opening_balance</strong> = previous outstanding
+function CustomerManagement() {
+  const [customers,setCustomers]=useState([]); const [brands,setBrands]=useState([]);
+  const [areas,setAreas]=useState([]); const [subgroups,setSubgroups]=useState([]);
+  const [loading,setLoading]=useState(true); const [search,setSearch]=useState("");
+  const [showAdd,setShowAdd]=useState(false); const [editTarget,setEditTarget]=useState(null);
+  const [showImport,setShowImport]=useState(false); const [deleteTarget,setDeleteTarget]=useState(null);
+  const emptyForm={code:"",name:"",phone:"",address:"",area_id:"",subgroup_id:"",brand_id:"",default_qty:"1",custom_rate:"",outstanding:"0"};
+  const [form,setForm]=useState(emptyForm); const [codeWarning,setCodeWarning]=useState(false);
+  useEffect(()=>{load();},[]);
+  const load=async()=>{setLoading(true);try{const [c,b,a,sg]=await Promise.all([getCustomers(),getBrands(),getAreas(),getSubgroups()]);setCustomers(c||[]);setBrands(b||[]);setAreas(a||[]);setSubgroups(sg||[]);}catch(e){console.error(e);}setLoading(false);};
+  const filteredSubs=subgroups.filter(sg=>sg.area_id===form.area_id);
+  const openAdd=()=>{setForm(emptyForm);setEditTarget(null);setCodeWarning(false);setShowAdd(true);};
+  const openEdit=(c)=>{setForm({code:c.code,name:c.name,phone:c.phone||"",address:c.address||"",area_id:c.area_id||"",subgroup_id:c.subgroup_id||"",brand_id:c.brand_id||"",default_qty:String(c.default_qty||1),custom_rate:String(c.custom_rate||""),outstanding:String(c.outstanding||0)});setEditTarget(c);setCodeWarning(false);setShowAdd(true);};
+  const doSave=async()=>{
+    if(!form.code.trim()){alert("Customer code is required");return;}
+    if(!form.name.trim()){alert("Name is required");return;}
+    try{
+      if(editTarget){await updateCustomer(editTarget.id,{code:form.code,name:form.name,phone:form.phone,address:form.address,area_id:form.area_id||null,subgroup_id:form.subgroup_id||null,brand_id:form.brand_id||null,default_qty:parseFloat(form.default_qty)||1,custom_rate:form.custom_rate?parseFloat(form.custom_rate):null,outstanding:parseFloat(form.outstanding)||0,portal_token:form.code});}
+      else{await addCustomer({...form,area_id:form.area_id||null,subgroup_id:form.subgroup_id||null});}
+      setShowAdd(false);setForm(emptyForm);setEditTarget(null);load();
+    }catch(e){alert("Error: "+e.message);}
+  };
+  const exportExcel=async()=>{try{if(!window.XLSX)await new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js";s.onload=res;s.onerror=rej;document.head.appendChild(s);});const rows=customers.map(c=>({Code:c.code,Name:c.name,Phone:c.phone,Address:c.address,Group:c.areas?.name||"",Subgroup:c.subgroups?.name||"",Brand:brands.find(b=>b.id===c.brand_id)?.name||"","Daily Qty":c.default_qty,"Custom Rate":c.custom_rate||"",Outstanding:c.outstanding||0}));const ws=window.XLSX.utils.json_to_sheet(rows);const wb=window.XLSX.utils.book_new();window.XLSX.utils.book_append_sheet(wb,ws,"Customers");window.XLSX.writeFile(wb,`Customers_${nowDate()}.xlsx`);}catch(e){alert("Export error: "+e.message);}};
+  const filtered=customers.filter(c=>!search||(c.name||"").toLowerCase().includes(search.toLowerCase())||(c.phone||"").includes(search)||(c.code||"").toLowerCase().includes(search.toLowerCase()));
+  const grouped={};
+  filtered.forEach(c=>{const aKey=c.area_id||"none";const aLabel=c.areas?.name||"No Group";const sgKey=c.subgroup_id||"none";const sgLabel=c.subgroups?.name||"No Subgroup";if(!grouped[aKey])grouped[aKey]={label:aLabel,subs:{}};if(!grouped[aKey].subs[sgKey])grouped[aKey].subs[sgKey]={label:sgLabel,customers:[]};grouped[aKey].subs[sgKey].customers.push(c);});
+  return(<div style={{padding:16}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}><div style={S.sectionTitle}>👥 Customers ({customers.length})</div><div style={{display:"flex",gap:6}}><button style={{...S.btnPrimary,background:"#1565C0",padding:"8px 10px",fontSize:12}} onClick={()=>setShowImport(true)}>📥 Import</button><button style={{...S.btnPrimary,background:"#6a1b9a",padding:"8px 10px",fontSize:12}} onClick={exportExcel}>📤 Export</button><button style={S.btnPrimary} onClick={openAdd}>+ Add</button></div></div>
+    <div style={S.searchBar}><span>🔍</span><input style={S.searchInput} placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
+    {loading?<Loader/>:filtered.length===0?<EmptyState icon="👥" message={search?"No customers found":"No customers yet. Tap + Add."}/>:
+      Object.entries(grouped).map(([aKey,group])=>(
+        <div key={aKey} style={{marginBottom:12}}>
+          <div style={{background:"#1a2744",color:"white",padding:"8px 12px",borderRadius:"8px 8px 0 0",fontWeight:700,fontSize:14}}>📍 {group.label}</div>
+          {Object.entries(group.subs).map(([sgKey,sub])=>(
+            <div key={sgKey} style={{border:"0.5px solid #eee",borderTop:"none"}}>
+              <div style={{background:"#eef2ff",color:"#1a2744",padding:"6px 12px",fontWeight:600,fontSize:13,borderBottom:"0.5px solid #eee"}}>🏢 {sub.label}</div>
+              {sub.customers.map(c=>{const brand=brands.find(b=>b.id===c.brand_id);return(<div key={c.id} style={{...S.listCard,flexDirection:"column",gap:8,borderRadius:0,borderBottom:"0.5px solid #f5f5f5"}}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:40,height:40,borderRadius:"50%",background:avatarColor(c.name),display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:"white",flexShrink:0}}>{roomNum(c.code)||initials(c.name)}</div><div style={{flex:1,minWidth:0}}><div style={{fontWeight:500,fontSize:14,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.name}</div><div style={{fontSize:12,color:"#888"}}>{c.code} • {c.phone}</div><div style={{fontSize:12,color:"#888"}}>{brand?.name||"No brand"} • {c.default_qty}L/day • ₹{c.custom_rate||brand?.rate||0}/L</div>{(c.outstanding||0)>0&&<div style={{fontSize:12,color:"#c62828"}}>OB: {fmtCurrency(c.outstanding)}</div>}</div></div><div style={{display:"flex",gap:6}}><a href={`https://wa.me/91${(c.phone||"").replace(/\D/g,"")}`} style={{flex:1,fontSize:11,padding:"5px 0",background:"#e7f9f0",border:"0.5px solid #b3dfcb",borderRadius:8,color:"#1a6b3c",textDecoration:"none",textAlign:"center"}}>📞 WhatsApp</a><button style={{flex:1,fontSize:11,padding:"5px 0",background:"#e8f0ff",border:"0.5px solid #c5d5f5",borderRadius:8,color:"#1565C0",cursor:"pointer"}} onClick={()=>openEdit(c)}>✏️ Edit</button><button style={{flex:1,fontSize:11,padding:"5px 0",background:"#fdf2f3",border:"0.5px solid #f5c6cb",borderRadius:8,color:"#c62828",cursor:"pointer"}} onClick={()=>setDeleteTarget(c)}>🗑 Remove</button></div></div>);})}
+            </div>
+          ))}
+        </div>
+      ))
+    }
+    {showAdd&&(<div style={S.modalBg} onClick={()=>{setShowAdd(false);setEditTarget(null);}}><div style={{...S.modal,maxHeight:"92vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+      <div style={S.modalHandle}/><div style={S.modalName}>{editTarget?"Edit Customer":"Add Customer"}</div>
+      <label style={S.formLabel}>Customer Code / Room No. *</label>
+      <input style={S.formInput} placeholder="e.g. C504 or C1002 (room number)" value={form.code} onChange={e=>{setForm(p=>({...p,code:e.target.value}));if(editTarget)setCodeWarning(true);}}/>
+      {codeWarning&&<div style={{background:"#fef3c7",border:"1px solid #ffc107",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#856404"}}>⚠️ Changing code will change the customer portal link. Share new link with customer.</div>}
+      <label style={S.formLabel}>Full Name *</label>
+      <input style={S.formInput} placeholder="Full name" value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))}/>
+      <label style={S.formLabel}>Phone (WhatsApp)</label>
+      <input style={S.formInput} type="tel" placeholder="10-digit mobile" value={form.phone} onChange={e=>setForm(p=>({...p,phone:e.target.value}))}/>
+      <label style={S.formLabel}>Group (Area / Zone)</label>
+      <select style={S.formInput} value={form.area_id} onChange={e=>setForm(p=>({...p,area_id:e.target.value,subgroup_id:""}))}>
+        <option value="">-- Select Group --</option>
+        {areas.map(a=><option key={a.id} value={a.id}>{a.name}{a.delivery_boy_name?" / "+a.delivery_boy_name:""}</option>)}
+      </select>
+      <label style={S.formLabel}>Subgroup (Building / Wing)</label>
+      <select style={S.formInput} value={form.subgroup_id} onChange={e=>setForm(p=>({...p,subgroup_id:e.target.value}))} disabled={!form.area_id}>
+        <option value="">-- Select Subgroup --</option>
+        {filteredSubs.map(sg=><option key={sg.id} value={sg.id}>{sg.name}</option>)}
+      </select>
+      <label style={S.formLabel}>Address / Notes</label>
+      <input style={S.formInput} placeholder="Flat/building details" value={form.address} onChange={e=>setForm(p=>({...p,address:e.target.value}))}/>
+      <label style={S.formLabel}>Milk Brand</label>
+      <select style={S.formInput} value={form.brand_id} onChange={e=>setForm(p=>({...p,brand_id:e.target.value}))}><option value="">Select brand...</option>{brands.map(b=><option key={b.id} value={b.id}>{b.name} — ₹{b.rate}/L</option>)}</select>
+      <div style={{display:"flex",gap:8}}><div style={{flex:1}}><label style={S.formLabel}>Daily Qty (L)</label><input style={S.formInput} type="text" inputMode="decimal" placeholder="e.g. 1.5" value={form.default_qty} onChange={e=>setForm(p=>({...p,default_qty:e.target.value}))}/></div><div style={{flex:1}}><label style={S.formLabel}>Custom Rate ₹/L</label><input style={S.formInput} type="text" inputMode="decimal" placeholder="Leave blank=brand rate" value={form.custom_rate} onChange={e=>setForm(p=>({...p,custom_rate:e.target.value}))}/></div></div>
+      <div style={{background:"#fff3cd",border:"1px solid #ffc107",borderRadius:10,padding:"12px 14px",marginBottom:12}}><div style={{fontWeight:500,fontSize:13,marginBottom:4}}>💰 Opening Balance</div><div style={{fontSize:12,color:"#856404",marginBottom:8}}>Amount owed before MilkFlow. Leave 0 if fresh start.</div><input style={{...S.formInput,marginBottom:0}} type="text" inputMode="decimal" placeholder="0" value={form.outstanding} onChange={e=>setForm(p=>({...p,outstanding:e.target.value}))}/></div>
+      <div style={S.modalActions}><button style={S.btnCancel} onClick={()=>{setShowAdd(false);setEditTarget(null);}}>Cancel</button><button style={S.btnSave} onClick={doSave}>{editTarget?"Save Changes":"Add Customer"}</button></div>
+    </div></div>)}
+    {showImport&&<BulkImportModal brands={brands} areas={areas} subgroups={subgroups} onClose={()=>setShowImport(false)} onDone={()=>{setShowImport(false);load();}}/>}
+    {deleteTarget&&<DeleteCustomerModal customer={deleteTarget} onClose={()=>setDeleteTarget(null)} onDone={()=>{setDeleteTarget(null);load();}}/>}
+  </div>);
+}
+
+function BulkImportModal({brands,areas,subgroups,onClose,onDone}) {
+  const [step,setStep]=useState("upload"); const [rows,setRows]=useState([]); const [result,setResult]=useState(null);
+  const downloadTemplate=()=>{const csv="code,name,phone,address,group_name,subgroup_name,brand_name,qty,rate,opening_balance\nC504,John Doe,9876543210,Flat 504,JB Nagar,Sumit A Wing,Amul Full Cream,1,68,0";const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="milkflow_template.csv";a.click();};
+  const handleFile=(e)=>{const f=e.target.files[0];if(!f)return;const reader=new FileReader();reader.onload=ev=>{const lines=ev.target.result.trim().split("\n");const headers=lines[0].split(",").map(h=>h.trim().toLowerCase().replace(/\s+/g,"_"));const parsed=lines.slice(1).map(line=>{const vals=line.split(",");const row={};headers.forEach((h,i)=>row[h]=vals[i]?.trim()||"");return row;});setRows(parsed);setStep("preview");};reader.readAsText(f);};
+  const runImport=async()=>{setStep("importing");const res=await bulkImportCustomers(rows,brands,[...areas],[...subgroups]);setResult(res);setStep("done");};
+  return(<div style={{...S.modalBg,alignItems:"flex-start",overflowY:"auto"}} onClick={onClose}><div style={{...S.modal,borderRadius:0,minHeight:"100vh",paddingBottom:40}} onClick={e=>e.stopPropagation()}>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onClose}>←</button><div style={{fontWeight:600,fontSize:16}}>📥 Import Customers</div></div>
+    {step==="upload"&&<div><button style={{...S.btnCancel,width:"100%",marginBottom:14}} onClick={downloadTemplate}>📄 Download CSV Template</button><div style={{background:"#e8f5ee",borderRadius:10,padding:12,marginBottom:14,fontSize:12,color:"#1a6b3c"}}>Columns: code | name | phone | address | group_name | subgroup_name | brand_name | qty | rate | opening_balance<br/><br/>• group_name & subgroup_name auto-created if not found<br/>• brand_name must match exactly</div><label style={{display:"block",border:"2px dashed #1a6b3c",borderRadius:12,padding:"32px 20px",textAlign:"center",cursor:"pointer"}}><div style={{fontSize:40,marginBottom:8}}>📊</div><div style={{fontSize:15,fontWeight:500,color:"#1a6b3c"}}>Tap to select CSV file</div><input type="file" accept=".csv" style={{display:"none"}} onChange={handleFile}/></label></div>}
+    {step==="preview"&&<div><div style={{background:"#e8f5ee",borderRadius:10,padding:14,marginBottom:14}}><div style={{fontWeight:600,color:"#1a6b3c"}}>✅ {rows.length} customers ready</div></div>{rows.slice(0,5).map((r,i)=><div key={i} style={S.listCard}><Avatar name={r.name} size={36}/><div style={{flex:1}}><div style={{fontWeight:500,fontSize:14}}>{r.name}</div><div style={{fontSize:12,color:"#888"}}>{r.code} • {r.group_name} • {r.subgroup_name}</div></div></div>)}{rows.length>5&&<div style={{textAlign:"center",fontSize:13,color:"#888",padding:8}}>...and {rows.length-5} more</div>}<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:14}}><button style={S.btnCancel} onClick={()=>setStep("upload")}>← Back</button><button style={S.btnSave} onClick={runImport}>Import {rows.length}</button></div></div>}
+    {step==="importing"&&<div style={{textAlign:"center",padding:"40px 20px"}}><div style={{fontSize:48,marginBottom:16}}>⏳</div><div style={{fontSize:18,fontWeight:600,color:"#1a6b3c"}}>Importing...</div></div>}
+    {step==="done"&&result&&<div style={{textAlign:"center",padding:"32px 20px"}}><div style={{fontSize:64}}>🎉</div><div style={{fontSize:22,fontWeight:700,color:"#1a6b3c",marginBottom:12}}>Done!</div><div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:8}}><div style={S.statBox}><div style={S.statBoxNum}>{result.success}</div><div style={S.statBoxLabel}>Imported</div></div>{result.failed>0&&<div style={S.statBox}><div style={{...S.statBoxNum,color:"#c62828"}}>{result.failed}</div><div style={S.statBoxLabel}>Failed</div></div>}</div>{result.errors.map((e,i)=><div key={i} style={{fontSize:12,color:"#c62828",marginBottom:3}}>• {e}</div>)}<button style={{...S.btnSave,padding:"14px 40px",fontSize:16,marginTop:12}} onClick={onDone}>✅ Done</button></div>}
+  </div></div>);
+}
+
+function DeleteCustomerModal({customer,onClose,onDone}) {
+  const [type,setType]=useState("soft"); const [step,setStep]=useState("confirm"); const [pin,setPin]=useState(""); const [err,setErr]=useState(""); const [doing,setDoing]=useState(false);
+  const doDelete=async()=>{if(pin!==OWNER_PIN){setErr("❌ Wrong PIN");setPin("");return;}setDoing(true);try{if(type==="soft")await deactivateCustomer(customer.id);else await deleteCustomer(customer.id);onDone();}catch(e){alert("Error: "+e.message);}setDoing(false);};
+  const pressPin=(d)=>{if(pin.length>=4)return;const next=pin+d;setPin(next);setErr("");if(next.length===4)setTimeout(()=>doDelete(),150);};
+  return(<div style={S.modalBg} onClick={onClose}><div style={S.modal} onClick={e=>e.stopPropagation()}>
+    <div style={S.modalHandle}/><div style={S.modalName}>Remove Customer</div><div style={S.modalMeta}>{customer.name} • {customer.code}</div>
+    {step==="confirm"&&<>{[["soft","😴","Deactivate (Recommended)","History kept, reactivate anytime","#1a6b3c"],["hard","🗑️","Permanent Delete","Only for test/duplicate entries","#c62828"]].map(([v,icon,label,desc,color])=>(<div key={v} style={{border:`2px solid ${type===v?color:"#eee"}`,borderRadius:12,padding:14,marginBottom:10,cursor:"pointer",background:type===v?color+"11":"white"}} onClick={()=>setType(v)}><div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:22}}>{icon}</span><div><div style={{fontWeight:600,fontSize:14,color}}>{label}</div><div style={{fontSize:12,color:"#888"}}>{desc}</div></div></div></div>))}<div style={S.modalActions}><button style={S.btnCancel} onClick={onClose}>Cancel</button><button style={{...S.btnSave,background:type==="hard"?"#c62828":"#1a6b3c"}} onClick={()=>setStep("pin")}>Continue →</button></div></>}
+    {step==="pin"&&<><div style={{background:"#fff3cd",borderRadius:10,padding:12,marginBottom:14,fontSize:13,color:"#856404"}}>Enter Owner PIN to confirm</div><div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:14}}>{[0,1,2,3].map(i=><div key={i} style={{width:18,height:18,borderRadius:"50%",border:"2px solid #1a6b3c",background:i<pin.length?"#1a6b3c":"white"}}/>)}</div>{err&&<div style={{color:"#c62828",fontSize:13,textAlign:"center",marginBottom:8}}>{err}</div>}<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,maxWidth:240,margin:"0 auto"}}>{[1,2,3,4,5,6,7,8,9].map(n=><button key={n} style={S.pinBtn} onClick={()=>pressPin(String(n))}>{n}</button>)}<div/><button style={S.pinBtn} onClick={()=>pressPin("0")}>0</button><button style={S.pinBtn} onClick={()=>setPin(p=>p.slice(0,-1))}>⌫</button></div>{doing&&<div style={{textAlign:"center",marginTop:12,color:"#888"}}>Processing...</div>}<button style={{...S.btnCancel,width:"100%",marginTop:14}} onClick={()=>{setStep("confirm");setPin("");setErr("");}}>← Back</button></>}
+  </div></div>);
+}
+
+function DailyRecords() {
+  const [date,setDate]=useState(nowDate()); const [entries,setEntries]=useState([]); const [loading,setLoading]=useState(false);
+  useEffect(()=>{load();},[date]);
+  const load=async()=>{setLoading(true);try{const d=await getDailyEntriesForDate(date);setEntries(d||[]);}catch{setEntries([]);}setLoading(false);};
+  const total=entries.reduce((s,e)=>s+(parseFloat(e.quantity)||0),0);
+  return(<div style={{padding:16}}><div style={S.sectionTitle}>📋 Daily Records</div><input type="date" value={date} onChange={e=>setDate(e.target.value)} style={{...S.formInput,marginBottom:12}}/><div style={S.statsGrid}><StatCard label="Entries" value={entries.length} icon="📝" color="#1a6b3c"/><StatCard label="Total Litres" value={total.toFixed(1)+"L"} icon="🥛" color="#1565C0"/></div>{loading?<Loader/>:entries.length===0?<EmptyState icon="📋" message="No entries for this date"/>:entries.map((e,i)=>(<div key={i} style={S.listCard}><Avatar name={e.customers?.name||""} size={36}/><div style={{flex:1}}><div style={{fontWeight:500,fontSize:14}}>{e.customers?.name||"—"}</div><div style={{fontSize:12,color:"#888"}}>{e.customers?.code} • {e.customers?.address}</div></div><div style={{fontWeight:600,color:parseFloat(e.quantity)===0?"#c62828":"#1a6b3c",fontSize:16}}>{parseFloat(e.quantity)===0?"🚫":e.quantity+"L"}</div></div>))}</div>);
+}
+
+function BillingSection() {
+  const now=new Date(); const [month,setMonth]=useState(now.getMonth()+1); const [year,setYear]=useState(now.getFullYear());
+  const [bills,setBills]=useState([]); const [loading,setLoading]=useState(false); const [generating,setGenerating]=useState(false); const [previewBill,setPreviewBill]=useState(null); const [sendingAll,setSendingAll]=useState(false); const [sendProgress,setSendProgress]=useState(0);
+  useEffect(()=>{loadBills();},[month,year]);
+  const loadBills=async()=>{setLoading(true);try{const d=await getBills(month,year);setBills(d||[]);}catch{setBills([]);}setLoading(false);};
+  const generateBills=async()=>{
+    setGenerating(true);
+    try{
+      const customers=await getCustomers();
+      const startDate=`${year}-${String(month).padStart(2,"0")}-01`;
+      const endDate=new Date(year,month,0).toISOString().split("T")[0];
+      const entries=await db("daily_entries","GET",null,`?entry_date=gte.${startDate}&entry_date=lte.${endDate}&select=customer_id,quantity,rate,amount`);
+      const entryMap={};(entries||[]).forEach(e=>{if(!entryMap[e.customer_id])entryMap[e.customer_id]={litres:0,amount:0};entryMap[e.customer_id].litres+=parseFloat(e.quantity)||0;entryMap[e.customer_id].amount+=parseFloat(e.amount)||0;});
+      for(const cust of(customers||[])){const data=entryMap[cust.id]||{litres:0,amount:0};const outstanding=parseFloat(cust.outstanding)||0;const total=data.amount+outstanding;const billNum=`BILL-${year}${String(month).padStart(2,"0")}-${cust.code}`;const existing=await db("bills","GET",null,`?customer_id=eq.${cust.id}&month=eq.${month}&year=eq.${year}&limit=1`);if(existing&&existing.length>0){await db("bills","PATCH",{total_litres:data.litres,month_amount:data.amount,outstanding,total_amount:total},`?id=eq.${existing[0].id}`);}else{await db("bills","POST",{bill_number:billNum,customer_id:cust.id,month,year,period_from:startDate,period_to:endDate,total_litres:data.litres,month_amount:data.amount,outstanding,total_amount:total,status:"pending",locked:false});}}
+      loadBills();alert(`✅ Bills generated for ${monthLabel(month,year)}!`);
+    }catch(e){alert("Error: "+e.message);}
+    setGenerating(false);
+  };
+  const billWAMsg=(bill)=>{const cust=bill.customers;const phone=(cust?.phone||"").replace(/\D/g,"");const portalLink=`${BASE_URL}/c/${cust?.code}`;const msg=`🥛 Saikrishna Milk Supply\nDear ${cust?.name},\n\nYour ${monthLabel(month,year)} milk bill is now ready.\n📋 Total Milk Supplied: ${parseFloat(bill.total_litres||0).toFixed(1)} Litres\n💰 Total Amount Due: ₹${bill.total_amount}\n\n👉 View your dashboard: ${portalLink}\n\nFrom your dashboard you can:\n• Record your daily milk from now onwards\n• View your detailed day-wise bill\n• Pay bills directly through the portal\n\nWe are happy to introduce this new digital system to provide you with better service, transparency, and convenience.\n\nThank you for your continued trust and support 🙏\n\nUPI: ${UPI_ID}\nAfter paying, please share payment screenshot on WhatsApp to confirm ✅`;return{phone,msg};};
+  const sendBillWA=(bill)=>{const{phone,msg}=billWAMsg(bill);window.open(`https://wa.me/91${phone}?text=${encodeURIComponent(msg)}`,"_blank");};
+  const sendAll=async()=>{const pending=bills.filter(b=>b.status!=="paid");if(pending.length===0){alert("All bills paid!");return;}if(!window.confirm(`Send bills to ${pending.length} customers?`))return;setSendingAll(true);for(let i=0;i<pending.length;i++){setSendProgress(i+1);sendBillWA(pending[i]);await new Promise(r=>setTimeout(r,2500));}setSendingAll(false);setSendProgress(0);};
+  const totalAmount=bills.reduce((s,b)=>s+(parseFloat(b.total_amount)||0),0);const paidCount=bills.filter(b=>b.status==="paid").length;
+  return(<div style={{padding:16}}>
+    <div style={S.sectionTitle}>🧾 Month-End Billing</div>
+    <div style={{display:"flex",gap:8,marginBottom:12}}>
+      <select style={{...S.formInput,flex:1,marginBottom:0}} value={month} onChange={e=>setMonth(parseInt(e.target.value))}>{Array.from({length:12},(_,i)=><option key={i+1} value={i+1}>{new Date(2024,i,1).toLocaleDateString("en-IN",{month:"long"})}</option>)}</select>
+      <select style={{...S.formInput,flex:0.6,marginBottom:0}} value={year} onChange={e=>setYear(parseInt(e.target.value))}>{[2024,2025,2026,2027].map(y=><option key={y}>{y}</option>)}</select>
+      <button style={{...S.btnPrimary,whiteSpace:"nowrap"}} onClick={generateBills} disabled={generating}>{generating?"⏳...":"⚡ Generate"}</button>
+    </div>
+    <div style={S.statsGrid}><StatCard label="Total Bills" value={bills.length} icon="🧾" color="#1565C0"/><StatCard label="Total Amount" value={fmtCurrency(totalAmount)} icon="💰" color="#1a6b3c"/><StatCard label="Paid" value={paidCount} icon="✅" color="#2E7D32"/><StatCard label="Pending" value={bills.length-paidCount} icon="⏳" color="#c62828"/></div>
+    {bills.length-paidCount>0&&<button style={{...S.btnPrimary,width:"100%",padding:13,marginBottom:12,fontSize:14}} onClick={sendAll} disabled={sendingAll}>{sendingAll?`📤 Sending ${sendProgress}/${bills.length-paidCount}...`:`📤 Send All ${bills.length-paidCount} Bills via WhatsApp`}</button>}
+    {loading?<Loader/>:bills.length===0?<EmptyState icon="🧾" message="No bills yet. Click Generate."/>:bills.map((b,i)=>(<div key={i} style={S.listCard}><Avatar name={b.customers?.name||""} size={40}/><div style={{flex:1,minWidth:0}}><div style={{fontWeight:500,fontSize:14,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.customers?.name}</div><div style={{fontSize:12,color:"#888"}}>{b.customers?.code} • {parseFloat(b.total_litres||0).toFixed(1)}L</div>{parseFloat(b.outstanding||0)>0&&<div style={{fontSize:11,color:"#c62828"}}>+{fmtCurrency(b.outstanding)} outstanding</div>}</div><div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}><div style={{fontWeight:600,fontSize:15}}>{fmtCurrency(b.total_amount)}</div><div style={{...S.statusBadge,...(b.status==="paid"?S.badgePaid:S.badgePending)}}>{b.status==="paid"?"✅ Paid":"⏳ Pending"}</div><div style={{display:"flex",gap:4}}><button style={{fontSize:11,padding:"3px 8px",background:"#e8f5ee",border:"0.5px solid #b8dfc8",borderRadius:8,color:"#1a6b3c",cursor:"pointer"}} onClick={()=>setPreviewBill(b)}>👁 View</button>{b.status!=="paid"&&<button style={{fontSize:11,padding:"3px 8px",background:"#e7f3ff",border:"0.5px solid #b3d4f5",borderRadius:8,color:"#1565C0",cursor:"pointer"}} onClick={()=>sendBillWA(b)}>📤 Send</button>}</div></div></div>))}
+    {previewBill&&(<div style={{...S.modalBg,alignItems:"flex-start",overflowY:"auto"}} onClick={()=>setPreviewBill(null)}><div style={{...S.modal,borderRadius:0,minHeight:"100vh",paddingBottom:40}} onClick={e=>e.stopPropagation()}><div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={()=>setPreviewBill(null)}>←</button><div style={{fontWeight:600,fontSize:16}}>Bill Preview</div><button style={{marginLeft:"auto",...S.btnPrimary,padding:"8px 14px",fontSize:13}} onClick={()=>sendBillWA(previewBill)}>📤 Send</button></div><BillDetailView bill={previewBill} customer={previewBill.customers} month={month} year={year}/></div></div>)}
+  </div>);
+}
+
+function BillDetailView({bill,customer,month,year,entries=[]}) {
+  const totalLitres=parseFloat(bill?.total_litres||0); const monthAmt=parseFloat(bill?.month_amount||0); const outstanding=parseFloat(bill?.outstanding||0); const totalDue=parseFloat(bill?.total_amount||0);
+  const brand=customer?.milk_brands||null; const rate=customer?.custom_rate||brand?.rate||0;
+  return(
+    <div style={{background:"#f0ebe0",minHeight:"100vh",padding:"16px 12px 40px"}}>
+      <div style={{background:"white",borderRadius:6,boxShadow:"0 8px 48px #00000020",overflow:"hidden",maxWidth:480,margin:"0 auto"}}>
+        <div style={{background:"linear-gradient(160deg,#1a2744 0%,#0f1a38 100%)",padding:"20px 20px 16px",position:"relative",overflow:"hidden"}}>
+          <div style={{position:"absolute",top:-40,right:-40,width:140,height:140,borderRadius:"50%",background:"#ffffff07"}}/>
+          <div style={{display:"flex",alignItems:"center",gap:14,position:"relative",zIndex:1}}>
+            <div style={{width:72,height:72,borderRadius:"50%",border:"2px solid #d4a843",background:"white",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><img src={logo_app} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="logo"/></div>
+            <div><div style={{fontSize:8,letterSpacing:3,color:"#ffffff45",textTransform:"uppercase",marginBottom:2}}>Official Milk Bill</div><div style={{fontFamily:"serif",fontSize:19,fontWeight:700,color:"white",lineHeight:1.15}}><span style={{color:"#d4a843"}}>Sai</span>krishna<br/>Milk Supply</div><div style={{fontSize:10,color:"#ffffff50",marginTop:4}}>UPI: {UPI_ID}</div></div>
+          </div>
+          <div style={{height:1,background:"linear-gradient(90deg,transparent,#ffffff20,transparent)",margin:"14px 0",position:"relative",zIndex:1}}/>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",position:"relative",zIndex:1}}>
+            <div><div style={{fontSize:8,letterSpacing:2,color:"#ffffff40",textTransform:"uppercase",marginBottom:2}}>Billed To</div><div style={{fontFamily:"serif",fontSize:16,color:"white",fontWeight:600}}>{customer?.name||"Customer"}</div><div style={{fontSize:10,color:"#d4a843",marginTop:1}}>Code: #{customer?.code}</div></div>
+            <div style={{textAlign:"right"}}><div style={{fontSize:8,letterSpacing:2,color:"#ffffff40",textTransform:"uppercase",marginBottom:2}}>Period</div><div style={{fontSize:11,color:"#ffffffcc",fontWeight:500}}>{monthLabel(month,year)}</div></div>
           </div>
         </div>
-        <button style={{ ...S.btn(C.gold, C.navy), marginBottom: 12 }} onClick={downloadTemplate}>⬇️ Download Template</button>
-        <input type="file" accept=".csv" onChange={handleFile} style={{ marginBottom: 12, display: "block" }} />
-        {preview.length > 0 && (
-          <div style={{ marginBottom: 12, overflowX: "auto" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Preview (first 5 rows):</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-              <thead><tr>{Object.keys(preview[0]).map(k => <th key={k} style={{ padding: "4px 6px", background: C.navy, color: C.white, textAlign: "left" }}>{k}</th>)}</tr></thead>
-              <tbody>{preview.map((r, i) => <tr key={i}>{Object.values(r).map((v, j) => <td key={j} style={{ padding: "4px 6px", borderBottom: `1px solid ${C.border}` }}>{v}</td>)}</tr>)}</tbody>
+        <div style={{display:"flex",background:"#f8f4e8",borderBottom:"1px solid #e8dfc8"}}>
+          {[[totalLitres.toFixed(1)+"L","Litres"],[rate?"₹"+rate+"/L":"—","Rate"],[entries.filter(e=>e.quantity>0).length||"—","Days"],[(brand?.name||"—").slice(0,6),"Brand"]].map(([v,l],i)=>(
+            <div key={i} style={{flex:1,padding:"10px 4px",textAlign:"center",borderRight:i<3?"1px solid #e8dfc8":"none"}}><div style={{fontSize:14,fontWeight:700,color:"#1a2744"}}>{v}</div><div style={{fontSize:10,color:"#888"}}>{l}</div></div>
+          ))}
+        </div>
+        {entries.length>0&&(
+          <div style={{padding:"0 0 8px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px 6px"}}><div style={{fontSize:12,fontWeight:700,color:"#1a2744"}}>Day-wise Delivery</div><div style={{flex:1,height:1,background:"#e8dfc8"}}/></div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{background:"#f8f4e8"}}>{["Date","Qty","Amount"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",color:"#888",fontWeight:600,fontSize:11}}>{h}</th>)}</tr></thead>
+              <tbody>{entries.map((e,i)=><tr key={i} style={{borderBottom:"0.5px solid #f5f0e8"}}><td style={{padding:"6px 10px",color:"#555",fontSize:11}}>{fmtDate(e.entry_date)}</td><td style={{padding:"6px 10px",fontWeight:600,color:parseFloat(e.quantity)===0?"#c62828":"#1a2744"}}>{parseFloat(e.quantity)===0?"0 L":e.quantity+" L"}</td><td style={{padding:"6px 10px",color:"#555"}}>₹{e.amount||0}</td></tr>)}</tbody>
             </table>
           </div>
         )}
-        {result && (
-          <div style={{ background: result.failed > 0 ? "#fff5f5" : "#f0fff4", borderRadius: 8, padding: 12, marginBottom: 12 }}>
-            <div style={{ fontWeight: 700 }}>✅ {result.success} imported &nbsp; ❌ {result.failed} failed</div>
-            {result.errors.map((e, i) => <div key={i} style={{ fontSize: 12, color: C.danger }}>{e}</div>)}
-          </div>
-        )}
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button style={S.btn(C.muted)} onClick={onCancel}>Close</button>
-          {!result && <button style={S.btn(C.navy)} onClick={doImport} disabled={!file || loading}>{loading ? "Importing..." : "Import"}</button>}
-          {result && <button style={S.btn(C.success)} onClick={onDone}>Done</button>}
+        <div style={{padding:"8px 16px 16px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}><div style={{fontSize:12,fontWeight:700,color:"#1a2744"}}>Bill Summary</div><div style={{flex:1,height:1,background:"#e8dfc8"}}/></div>
+          {[["Total Litres",totalLitres.toFixed(1)+" L"],["Month Total",fmtCurrency(monthAmt)]].map(([l,v])=>(<div key={l} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:8,color:"#555"}}><span>{l}</span><span style={{fontWeight:500}}>{v}</span></div>))}
+          {outstanding>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:8,color:"#c0392b"}}><span>⚠ Previous Outstanding</span><span>+ {fmtCurrency(outstanding)}</span></div>}
+          <div style={{borderTop:"2px solid #1a2744",marginTop:8,paddingTop:10,display:"flex",justifyContent:"space-between"}}><span style={{fontWeight:700,fontSize:15}}>Total Amount Due</span><span style={{fontWeight:800,fontSize:20,color:"#c0392b"}}>{fmtCurrency(totalDue)}</span></div>
+        </div>
+        <div style={{background:"#f8f4e8",borderTop:"1px solid #e8dfc8",padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div><div style={{fontFamily:"serif",fontSize:13,fontWeight:700}}><span style={{color:"#b8860b"}}>Sai</span>krishna Milk Supply</div><div style={{fontSize:11,color:"#888"}}>Pure Milk • Pure Love • Pure Life</div></div>
+          <div style={{textAlign:"right",fontSize:11,color:"#888"}}>Thank you 🙏</div>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── OWNER ENTRY ──────────────────────────────────────────────────────────────
-function OwnerEntry({ show }) {
-  const [customers, setCustomers] = useState([]);
-  const [entries, setEntries] = useState([]);
-  const [brands, setBrands] = useState([]);
-  const [date, setDate] = useState(today());
-  const [loading, setLoading] = useState(true);
+function PaymentTracking() {
+  const [payments,setPayments]=useState([]); const [customers,setCustomers]=useState([]); const [filter,setFilter]=useState("pending_confirmation"); const [loading,setLoading]=useState(true);
+  const [showCash,setShowCash]=useState(false); const [cashForm,setCashForm]=useState({customer_id:"",amount:"",note:""});
+  useEffect(()=>{loadAll();},[]);
+  const loadAll=async()=>{setLoading(true);try{const [p,c]=await Promise.all([getPayments(),getCustomers()]);setPayments(p||[]);setCustomers(c||[]);}catch{setPayments([]);setCustomers([]);}setLoading(false);};
+  const doConfirm=async(p)=>{try{await confirmPayment(p.id,p.bill_id);loadAll();}catch(e){alert("Error: "+e.message);}};
+  const doReject=async(p)=>{if(!window.confirm("Reject this payment?"))return;try{await rejectPayment(p.id);loadAll();}catch(e){alert("Error: "+e.message);}};
+  const doMarkCash=async()=>{if(!cashForm.customer_id||!cashForm.amount){alert("Select customer and enter amount");return;}try{await addPayment({customer_id:cashForm.customer_id,amount:parseFloat(cashForm.amount),payment_method:"cash",status:"confirmed",notes:cashForm.note||"Cash payment"});setCashForm({customer_id:"",amount:"",note:""});setShowCash(false);loadAll();alert("✅ Cash payment recorded!");}catch(e){alert("Error: "+e.message);}};
+  const pendingCount=payments.filter(p=>p.status==="pending_confirmation").length;
+  const filtered=payments.filter(p=>filter==="all"||p.status===filter);
+  return(<div style={{padding:16}}>
+    <div style={S.sectionTitle}>💳 Payment Tracking</div>
+    <div style={S.statsGrid}><StatCard label="Awaiting Review" value={pendingCount} icon="⏳" color={pendingCount>0?"#c62828":"#1a6b3c"}/><StatCard label="Total Records" value={payments.length} icon="📋" color="#1565C0"/></div>
+    <div style={{display:"flex",gap:8,marginBottom:14}}><button style={{flex:1,background:"#f0f4ff",border:"0.5px solid #c5d5f5",borderRadius:10,padding:"10px 8px",fontSize:13,color:"#1565C0",cursor:"pointer"}} onClick={()=>setShowCash(true)}>💵 Mark Cash Paid</button></div>
+    {pendingCount>0&&<div style={S.alertBox}><span style={{fontSize:20}}>⚠️</span><div><div style={{fontWeight:500,fontSize:14}}>{pendingCount} payment{pendingCount>1?"s":""} waiting</div><div style={{fontSize:12,color:"#856404"}}>Check GPay/PhonePe and confirm below</div></div></div>}
+    <div style={S.filterRow}>{[["pending_confirmation",`⏳ Review (${pendingCount})`],["confirmed","✅ Confirmed"],["rejected","❌ Rejected"],["all","All"]].map(([f,l])=>(<button key={f} style={{...S.filterChip,...(filter===f?S.filterChipActive:{})}} onClick={()=>setFilter(f)}>{l}</button>))}</div>
+    {loading?<Loader/>:filtered.length===0?<EmptyState icon="💳" message="No payments found"/>:filtered.map((p,i)=>(<div key={i} style={S.listCard}><Avatar name={p.customers?.name||""} size={40}/><div style={{flex:1,minWidth:0}}><div style={{fontWeight:500,fontSize:14}}>{p.customers?.name}</div><div style={{fontSize:12,color:"#888"}}>{p.customers?.code} • {p.payment_method} • {fmtDate(p.payment_date)}</div>{p.notes&&<div style={{fontSize:11,color:"#888",marginTop:2}}>{p.notes}</div>}</div><div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}><div style={{fontWeight:700,fontSize:16,color:"#1a6b3c"}}>{fmtCurrency(p.amount)}</div><div style={{...S.statusBadge,...(p.status==="confirmed"?S.badgePaid:p.status==="rejected"?S.badgeRejected:S.badgePending)}}>{p.status==="confirmed"?"✅ Paid":p.status==="rejected"?"❌ Rejected":"⏳ Review"}</div>{p.status==="pending_confirmation"&&<div style={{display:"flex",gap:4}}><button style={{fontSize:11,padding:"3px 8px",background:"#d4edda",border:"0.5px solid #b8dfc8",borderRadius:8,color:"#155724",cursor:"pointer"}} onClick={()=>doConfirm(p)}>✅ Confirm</button><button style={{fontSize:11,padding:"3px 8px",background:"#f8d7da",border:"0.5px solid #f5c6cb",borderRadius:8,color:"#721c24",cursor:"pointer"}} onClick={()=>doReject(p)}>❌ Reject</button></div>}</div></div>))}
+    {showCash&&(<div style={S.modalBg} onClick={()=>setShowCash(false)}><div style={S.modal} onClick={e=>e.stopPropagation()}><div style={S.modalHandle}/><div style={S.modalName}>💵 Mark Cash Paid</div><label style={S.formLabel}>Customer</label><select style={S.formInput} value={cashForm.customer_id} onChange={e=>setCashForm(p=>({...p,customer_id:e.target.value}))}><option value="">Select customer...</option>{customers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}</select><label style={S.formLabel}>Amount (₹)</label><input style={S.formInput} type="number" value={cashForm.amount} onChange={e=>setCashForm(p=>({...p,amount:e.target.value}))}/><label style={S.formLabel}>Note (optional)</label><input style={S.formInput} value={cashForm.note} onChange={e=>setCashForm(p=>({...p,note:e.target.value}))}/><div style={S.modalActions}><button style={S.btnCancel} onClick={()=>setShowCash(false)}>Cancel</button><button style={S.btnSave} onClick={doMarkCash}>Record Cash</button></div></div></div>)}
+  </div>);
+}
 
-  useEffect(() => { load(); }, [date]);
+function ReportsSection() {
+  const [sub,setSub]=useState("procurement");
+  return(<div style={{padding:16}}><div style={S.sectionTitle}>📊 Reports</div><div style={S.filterRow}>{[["procurement","🥛 Procurement"],["reminders","⏰ Reminders"],["inactive","😴 Inactive"],["export","📤 Export"]].map(([id,label])=>(<button key={id} style={{...S.filterChip,...(sub===id?S.filterChipActive:{})}} onClick={()=>setSub(id)}>{label}</button>))}</div>{sub==="procurement"&&<ProcurementEstimate/>}{sub==="reminders"&&<PaymentReminders/>}{sub==="inactive"&&<InactiveCustomers/>}{sub==="export"&&<ExportSection/>}</div>);
+}
 
-  async function load() {
-    setLoading(true);
-    try {
-      const [c, e, b] = await Promise.all([DB.getActiveCustomers(), DB.getDailyEntries(date), DB.getBrands()]);
-      setCustomers(c); setEntries(e); setBrands(b);
-    } catch { show("Failed to load", "error"); }
-    setLoading(false);
-  }
+function ProcurementEstimate() {
+  const [customers,setCustomers]=useState([]); const [brands,setBrands]=useState([]); const [todayEntries,setTodayEntries]=useState([]); const [loading,setLoading]=useState(true);
+  useEffect(()=>{Promise.all([getCustomers(),getBrands(),getTodayEntries()]).then(([c,b,e])=>{setCustomers(c||[]);setBrands(b||[]);setTodayEntries(e||[]);setLoading(false);}).catch(()=>setLoading(false));},[]);
+  const hasActual=todayEntries.length>0;
+  const byBrand={};
+  if(hasActual){todayEntries.forEach(e=>{const cust=customers.find(c=>c.id===e.customer_id);const b=brands.find(br=>br.id===cust?.brand_id);const name=b?.name||"Unknown";if(!byBrand[name])byBrand[name]={qty:0,count:0};byBrand[name].qty+=parseFloat(e.quantity)||0;byBrand[name].count++;});}
+  else{customers.forEach(c=>{const b=brands.find(br=>br.id===c.brand_id);const name=b?.name||"Unknown";if(!byBrand[name])byBrand[name]={qty:0,count:0};byBrand[name].qty+=parseFloat(c.default_qty)||0;byBrand[name].count++;});}
+  const total=Object.values(byBrand).reduce((s,b)=>s+b.qty,0);
+  if(loading)return<Loader/>; if(customers.length===0)return<EmptyState icon="🥛" message="No customers yet"/>;
+  return(<div style={{marginTop:8}}><div style={{background:"#e8f5ee",border:"1px solid #b8dfc8",borderRadius:10,padding:14,marginBottom:8}}><div style={{fontWeight:600,fontSize:15,color:"#1a6b3c"}}>🥛 {hasActual?"Today's Actual":"Tomorrow's Planned Order"}</div><div style={{fontSize:28,fontWeight:700,color:"#1a6b3c",marginTop:4}}>{total.toFixed(1)} Litres</div><div style={{fontSize:12,color:hasActual?"#1a6b3c":"#856404",marginTop:2}}>{hasActual?"✅ Actual delivered quantities":"📋 Planned (based on defaults — no entries yet today)"}</div></div>{Object.entries(byBrand).map(([name,data])=>(<div key={name} style={S.listCard}><div style={{flex:1}}><div style={{fontWeight:500}}>{name}</div><div style={{fontSize:12,color:"#888"}}>{data.count} customers</div></div><div style={{fontWeight:700,fontSize:18,color:"#1a6b3c"}}>{data.qty.toFixed(1)}L</div></div>))}<button style={{...S.btnPrimary,width:"100%",padding:12,marginTop:8}} onClick={()=>{const lines=Object.entries(byBrand).map(([n,d])=>`• ${n}: ${d.qty.toFixed(1)}L`).join("\n");window.open(`https://wa.me/?text=${encodeURIComponent(`🥛 ${hasActual?"Today's Actual":"Tomorrow's Milk Order"}\n\n${lines}\n\nTotal: ${total.toFixed(1)}L\n\n— Saikrishna Milk Supply`)}`,"_blank");}}>📤 Send Order to Supplier via WhatsApp</button></div>);
+}
 
-  const entryMap = {};
-  entries.forEach(e => { entryMap[e.customer_id] = e; });
+function InactiveCustomers() {
+  const [inactive,setInactive]=useState([]); const [loading,setLoading]=useState(true);
+  useEffect(()=>{load();},[]);
+  const load=async()=>{setLoading(true);try{const cutoff=new Date(Date.now()-7*86400000).toISOString().split("T")[0];const [customers,recent]=await Promise.all([getCustomers(),db("daily_entries","GET",null,`?entry_date=gte.${cutoff}&select=customer_id`)]);const activeIds=new Set((recent||[]).map(e=>e.customer_id));setInactive((customers||[]).filter(c=>!activeIds.has(c.id)));}catch{setInactive([]);}setLoading(false);};
+  if(loading)return<Loader/>;
+  return(<div style={{marginTop:8}}><div style={{background:inactive.length>0?"#fff3cd":"#e8f5ee",border:`1px solid ${inactive.length>0?"#ffc107":"#b8dfc8"}`,borderRadius:10,padding:12,marginBottom:14}}><div style={{fontWeight:500,fontSize:14,color:inactive.length>0?"#856404":"#1a6b3c"}}>{inactive.length>0?`⚠️ ${inactive.length} customers with no delivery in 7+ days`:"✅ All customers active"}</div></div>{inactive.length===0?<EmptyState icon="✅" message="All customers received delivery in last 7 days"/>:inactive.map((c,i)=>(<div key={i} style={S.listCard}><Avatar name={c.name} size={40}/><div style={{flex:1}}><div style={{fontWeight:500}}>{c.name}</div><div style={{fontSize:12,color:"#888"}}>{c.code} • {c.default_qty}L/day</div></div><a href={`https://wa.me/91${(c.phone||"").replace(/\D/g,"")}`} style={{fontSize:12,padding:"6px 10px",background:"#e8f5ee",border:"0.5px solid #b8dfc8",borderRadius:8,color:"#1a6b3c",textDecoration:"none"}}>📞</a></div>))}</div>);
+}
 
-  async function saveEntry(customer, qty) {
-    const brand = brands.find(b => b.id === customer.brand_id) || brands[0];
-    if (!brand) return;
-    const rate = customer.custom_rate || brand.rate;
-    try {
-      await DB.upsertDailyEntry({ customer_id: customer.id, entry_date: date, brand_id: brand.id, quantity: qty, rate });
-      show("Entry saved", "success"); load();
-    } catch (e) { show("Error: " + e.message, "error"); }
-  }
+function PaymentReminders() {
+  const [bills,setBills]=useState([]); const [loading,setLoading]=useState(true);
+  const now=new Date(); const month=now.getMonth()+1; const year=now.getFullYear(); const day=now.getDate(); const level=day>=20?3:day>=15?2:day>=10?1:0;
+  useEffect(()=>{getBills(month,year).then(d=>{setBills((d||[]).filter(b=>b.status!=="paid"));setLoading(false);}).catch(()=>setLoading(false));},[]);
+  const getMsg=(bill)=>{const name=bill.customers?.name?.split(" ")[0]||"ji";const amt=fmtCurrency(bill.total_amount);const url=`${BASE_URL}/c/${bill.customers?.code}`;if(level===1)return `🙏 Namaste ${name} ji,\n\nGentle reminder — your ${monthLabel(month,year)} milk bill of *${amt}* is due.\n\nView & Pay: ${url}\n\nPlease share screenshot after payment ✅\n\n— Saikrishna Milk Supply`;if(level===2)return `📋 Namaste ${name} ji,\n\nYour milk bill of *${amt}* for ${monthLabel(month,year)} is still pending.\n\nView & Pay: ${url}\n\n— Saikrishna Milk Supply`;return `⚠️ Namaste ${name} ji,\n\nFinal reminder — *${amt}* milk bill is overdue. Will show as OUTSTANDING on next bill.\n\nPay now: ${url}\n\n— Saikrishna Milk Supply`;};
+  const sendReminder=(bill)=>{const phone=(bill.customers?.phone||"").replace(/\D/g,"");window.open(`https://wa.me/91${phone}?text=${encodeURIComponent(getMsg(bill))}`,"_blank");};
+  const sendAll=async()=>{if(!window.confirm(`Send reminders to ${bills.length} customers?`))return;for(const b of bills){sendReminder(b);await new Promise(r=>setTimeout(r,2500));}};
+  if(loading)return<Loader/>;
+  return(<div style={{marginTop:8}}><div style={{background:"white",border:"0.5px solid #eee",borderRadius:12,padding:14,marginBottom:14}}><div style={{fontSize:13,color:"#888",marginBottom:8}}>Today is Day {day} of month</div><div style={{display:"flex",gap:4}}>{[1,2,3].map(l=>(<div key={l} style={{flex:1,borderRadius:8,padding:"8px 6px",textAlign:"center",background:l<=level?"#1a6b3c":"#f5f5f5"}}><div style={{fontSize:11,color:l<=level?"white":"#888",fontWeight:500}}>Day {l===1?"10":l===2?"15":"20"}</div><div style={{fontSize:10,color:l<=level?"rgba(255,255,255,0.8)":"#bbb"}}>{l===1?"Gentle":l===2?"Firm":"Final"}</div></div>))}</div></div>{bills.length===0?<EmptyState icon="🎉" message="All customers have paid this month!"/>:<><button style={{...S.btnPrimary,width:"100%",padding:13,fontSize:14,marginBottom:14}} onClick={sendAll} disabled={level===0}>{level===0?"🔒 Reminders start Day 10":`📤 Send reminders to all (${bills.length})`}</button>{bills.map((b,i)=>(<div key={i} style={S.listCard}><Avatar name={b.customers?.name||""} size={40}/><div style={{flex:1}}><div style={{fontWeight:500,fontSize:14}}>{b.customers?.name}</div><div style={{fontSize:12,color:"#888"}}>{fmtCurrency(b.total_amount)}</div></div><button style={{background:"#25D366",border:"none",borderRadius:10,padding:"8px 12px",color:"white",fontSize:12,cursor:"pointer"}} onClick={()=>sendReminder(b)}>📤 Remind</button></div>))}</>}</div>);
+}
 
-  if (loading) return <div style={{ textAlign: "center", padding: 40 }}>Loading...</div>;
+function ExportSection() {
+  const [exporting,setExporting]=useState(null);
+  const loadXLSX=async()=>{if(window.XLSX)return window.XLSX;await new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js";s.onload=res;s.onerror=rej;document.head.appendChild(s);});return window.XLSX;};
+  const doExport=async(type)=>{setExporting(type);try{const XLSX=await loadXLSX();let rows=[];let sheetName=type;if(type==="customers"){const [c,b]=await Promise.all([getCustomers(),getBrands()]);rows=(c||[]).map(cu=>({Code:cu.code,Name:cu.name,Phone:cu.phone,Group:cu.areas?.name||"",Subgroup:cu.subgroups?.name||"",Brand:b.find(br=>br.id===cu.brand_id)?.name||"","Daily Qty":cu.default_qty,"Custom Rate":cu.custom_rate||"",Outstanding:cu.outstanding||0}));sheetName="Customers";}else if(type==="payments"){const p=await getPayments();rows=(p||[]).map(pm=>({Date:pm.payment_date,Customer:pm.customers?.name||"",Code:pm.customers?.code||"",Amount:pm.amount,Method:pm.payment_method,Status:pm.status}));sheetName="Payments";}const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,sheetName);XLSX.writeFile(wb,`MilkFlow_${sheetName}_${nowDate()}.xlsx`);}catch(e){alert("Error: "+e.message);}setExporting(null);};
+  return(<div style={{marginTop:8}}>{[["customers","👥","Customer List","All customers with rates and balances"],["payments","💳","Payment Records","All payments with status"]].map(([type,icon,label,desc])=>(<div key={type} style={S.listCard}><div style={{fontSize:28}}>{icon}</div><div style={{flex:1}}><div style={{fontWeight:500,fontSize:14}}>{label}</div><div style={{fontSize:12,color:"#888"}}>{desc}</div></div><button style={{...S.btnPrimary,padding:"8px 14px",fontSize:13,background:exporting===type?"#888":"#1a6b3c"}} onClick={()=>doExport(type)} disabled={!!exporting}>{exporting===type?"⏳...":"📥 Export"}</button></div>))}</div>);
+}
 
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ ...S.input, flex: 1, width: "auto" }} />
+function OwnerSettings() {
+  const [sub,setSub]=useState("groups");
+  return(<div style={{padding:16}}><div style={S.sectionTitle}>⚙️ Settings</div><div style={S.filterRow}>{[["groups","📍 Groups"],["brands","🥛 Brands"],["balance","⚖️ Balances"],["lock","🔒 Month Lock"],["about","ℹ️ About"]].map(([id,label])=>(<button key={id} style={{...S.filterChip,...(sub===id?S.filterChipActive:{})}} onClick={()=>setSub(id)}>{label}</button>))}</div>{sub==="groups"&&<GroupsManager/>}{sub==="brands"&&<BrandManagement/>}{sub==="balance"&&<OpeningBalanceSetup/>}{sub==="lock"&&<MonthLockSection/>}{sub==="about"&&<AboutSection/>}</div>);
+}
+
+function GroupsManager() {
+  const [areas,setAreas]=useState([]); const [subgroups,setSubgroups]=useState([]); const [loading,setLoading]=useState(true);
+  const [newGroup,setNewGroup]=useState({name:"",delivery_boy_name:""}); const [newSg,setNewSg]=useState({area_id:"",name:""});
+  const [editGroup,setEditGroup]=useState(null); const [editSg,setEditSg]=useState(null);
+  useEffect(()=>{load();},[]);
+  const load=async()=>{setLoading(true);try{const [a,sg]=await Promise.all([getAreas(),getSubgroups()]);setAreas(a||[]);setSubgroups(sg||[]);}catch{}setLoading(false);};
+  if(loading)return<Loader/>;
+  return(<div style={{marginTop:8}}>
+    <div style={{background:"white",border:"0.5px solid #eee",borderRadius:12,padding:14,marginBottom:12}}>
+      <div style={{fontWeight:600,marginBottom:10}}>➕ Add Group</div>
+      <input style={S.formInput} placeholder="Group name (e.g. JB Nagar)" value={newGroup.name} onChange={e=>setNewGroup(g=>({...g,name:e.target.value}))}/>
+      <input style={S.formInput} placeholder="Delivery boy name (optional)" value={newGroup.delivery_boy_name} onChange={e=>setNewGroup(g=>({...g,delivery_boy_name:e.target.value}))}/>
+      <button style={S.btnPrimary} onClick={async()=>{if(!newGroup.name.trim())return;await addArea(newGroup.name,newGroup.delivery_boy_name);setNewGroup({name:"",delivery_boy_name:""});load();}}>Add Group</button>
+    </div>
+    <div style={{background:"white",border:"0.5px solid #eee",borderRadius:12,padding:14,marginBottom:12}}>
+      <div style={{fontWeight:600,marginBottom:10}}>➕ Add Subgroup / Building</div>
+      <select style={S.formInput} value={newSg.area_id} onChange={e=>setNewSg(sg=>({...sg,area_id:e.target.value}))}><option value="">-- Select Group --</option>{areas.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select>
+      <input style={S.formInput} placeholder="Subgroup name (e.g. Sumit A Wing)" value={newSg.name} onChange={e=>setNewSg(sg=>({...sg,name:e.target.value}))}/>
+      <button style={S.btnPrimary} onClick={async()=>{if(!newSg.area_id||!newSg.name.trim())return;await addSubgroup(newSg.area_id,newSg.name);setNewSg({area_id:"",name:""});load();}}>Add Subgroup</button>
+    </div>
+    {areas.map(area=>{const areaSgs=subgroups.filter(sg=>sg.area_id===area.id);return(<div key={area.id} style={{marginBottom:10}}>
+      <div style={{background:"#1a2744",color:"white",padding:"8px 12px",borderRadius:"8px 8px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontWeight:700}}>📍 {area.name}{area.delivery_boy_name?" / "+area.delivery_boy_name:""}</span>
+        <div style={{display:"flex",gap:6}}><button style={{background:"#d4a843",border:"none",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer",color:"#1a2744",fontWeight:600}} onClick={()=>setEditGroup({...area})}>✏️</button><button style={{background:"#dc2626",border:"none",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer",color:"white"}} onClick={async()=>{if(!confirm("Delete group?"))return;await deleteArea(area.id);load();}}>🗑</button></div>
       </div>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>{entries.length} of {customers.length} entries recorded</div>
-      {customers.map(c => {
-        const entry = entryMap[c.id];
-        const brand = brands.find(b => b.id === c.brand_id);
-        return (
-          <div key={c.id} style={{ ...S.card, display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={S.avatar(38)}>{roomNum(c.code) || getInitials(c.name)}</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: 13 }}>{c.name}</div>
-              <div style={{ fontSize: 11, color: C.muted }}>{c.code} · {brand?.name || "No brand"}</div>
-            </div>
-            <EntryQtyControl defaultQty={c.default_qty || 1} savedQty={entry?.quantity} onSave={qty => saveEntry(c, qty)} />
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function EntryQtyControl({ defaultQty, savedQty, onSave }) {
-  const [qty, setQty] = useState(savedQty ?? defaultQty);
-  const [dirty, setDirty] = useState(false);
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <button style={S.btnSm(C.border, C.text)} onClick={() => { setQty(q => Math.max(0, +(q - 0.5).toFixed(1))); setDirty(true); }}>−</button>
-      <span style={{ fontWeight: 800, minWidth: 34, textAlign: "center" }}>{qty}L</span>
-      <button style={S.btnSm(C.border, C.text)} onClick={() => { setQty(q => +(q + 0.5).toFixed(1)); setDirty(true); }}>+</button>
-      {dirty && <button style={S.btnSm(C.success)} onClick={() => { onSave(qty); setDirty(false); }}>✓</button>}
-      {savedQty !== undefined && !dirty && <span style={{ fontSize: 11, color: C.success }}>✅</span>}
-    </div>
-  );
-}
-
-// ─── BILLS ────────────────────────────────────────────────────────────────────
-function OwnerBills({ show }) {
-  const [customers, setCustomers] = useState([]);
-  const [bills, setBills] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [genModal, setGenModal] = useState(false);
-  const [bulkSending, setBulkSending] = useState(false);
-  const now = new Date();
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
-
-  useEffect(() => { load(); }, []);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const [c, b] = await Promise.all([DB.getActiveCustomers(), DB.getBills()]);
-      setCustomers(c); setBills(b);
-    } catch { show("Failed to load", "error"); }
-    setLoading(false);
-  }
-
-  async function generateBill(customer) {
-    try {
-      const entries = await DB.getMonthEntries(customer.id, month, year);
-      if (entries.length === 0) return;
-      const totalLitres = entries.reduce((s, e) => s + e.quantity, 0);
-      const monthAmt = entries.reduce((s, e) => s + e.amount, 0);
-      const billNum = `BILL-${customer.code}-${year}${String(month).padStart(2, "0")}`;
-      if (bills.find(b => b.bill_number === billNum)) return;
-      await DB.createBill({
-        bill_number: billNum, customer_id: customer.id, month, year,
-        period_from: `${year}-${String(month).padStart(2, "0")}-01`,
-        period_to: `${year}-${String(month).padStart(2, "0")}-31`,
-        total_litres: totalLitres, month_amount: monthAmt,
-        outstanding: customer.outstanding || 0,
-        total_amount: monthAmt + (customer.outstanding || 0),
-        status: "unpaid",
-      });
-    } catch {}
-  }
-
-  async function bulkSendWA() {
-    const monthBills = bills.filter(b => b.month === month && b.year === year);
-    if (monthBills.length === 0) { show("No bills for selected month", "warning"); return; }
-    setBulkSending(true);
-    for (let i = 0; i < monthBills.length; i++) {
-      const bill = monthBills[i];
-      const customer = customers.find(c => c.id === bill.customer_id);
-      if (!customer?.phone) continue;
-      setTimeout(() => window.open(waLink(customer.phone, billWAMessage(customer, bill)), "_blank"), i * 2500);
-    }
-    setTimeout(() => { setBulkSending(false); show(`${monthBills.length} bills sent!`, "success"); }, monthBills.length * 2500 + 500);
-  }
-
-  const monthBills = bills.filter(b => b.month === month && b.year === year);
-  if (loading) return <div style={{ textAlign: "center", padding: 40 }}>Loading...</div>;
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <select style={{ ...S.input, width: "auto" }} value={month} onChange={e => setMonth(+e.target.value)}>
-          {Array.from({ length: 12 }, (_, i) => <option key={i + 1} value={i + 1}>{new Date(2000, i).toLocaleString("en-IN", { month: "long" })}</option>)}
-        </select>
-        <select style={{ ...S.input, width: "auto" }} value={year} onChange={e => setYear(+e.target.value)}>
-          {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
-        </select>
-        <button style={S.btn(C.gold, C.navy)} onClick={() => setGenModal(true)}>⚡ Generate Bills</button>
-        <button style={S.btn(C.success)} onClick={bulkSendWA} disabled={bulkSending}>
-          {bulkSending ? "Sending..." : "📲 Bulk WhatsApp"}
-        </button>
+      <div style={{border:"0.5px solid #eee",borderTop:"none",borderRadius:"0 0 8px 8px"}}>
+        {areaSgs.length===0?<div style={{padding:"10px 12px",fontSize:13,color:"#888"}}>No subgroups yet. Add one above.</div>:areaSgs.map(sg=>(<div key={sg.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",borderBottom:"0.5px solid #f5f5f5"}}><span style={{fontSize:13}}>🏢 {sg.name}</span><div style={{display:"flex",gap:6}}><button style={{background:"#e8f0ff",border:"0.5px solid #c5d5f5",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#1565C0"}} onClick={()=>setEditSg({...sg})}>✏️</button><button style={{background:"#fdf2f3",border:"0.5px solid #f5c6cb",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#c62828"}} onClick={async()=>{if(!confirm("Delete subgroup?"))return;await deleteSubgroup(sg.id);load();}}>🗑</button></div></div>))}
       </div>
-
-      {monthBills.length === 0 ? (
-        <div style={{ ...S.card, textAlign: "center", color: C.muted, padding: 32 }}>No bills for {fmtMonth(month, year)}.</div>
-      ) : monthBills.map(bill => {
-        const customer = customers.find(c => c.id === bill.customer_id);
-        return (
-          <div key={bill.id} style={S.card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <div>
-                <div style={{ fontWeight: 700 }}>{customer?.name || "Unknown"}</div>
-                <div style={{ fontSize: 12, color: C.muted }}>{bill.bill_number}</div>
-                <div style={{ fontSize: 13, marginTop: 4 }}>{bill.total_litres}L · <strong>₹{bill.total_amount}</strong></div>
-              </div>
-              <div style={{ display: "flex", gap: 6, flexDirection: "column", alignItems: "flex-end" }}>
-                <span style={S.badge(bill.status === "paid" ? C.success : bill.status === "partial" ? C.warning : C.danger)}>{bill.status}</span>
-                {customer?.phone && (
-                  <button style={S.btnSm(C.success)} onClick={() => window.open(waLink(customer.phone, billWAMessage(customer, bill)), "_blank")}>
-                    💬 Send
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })}
-
-      {genModal && (
-        <div style={S.modal}>
-          <div style={S.modalBox}>
-            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>⚡ Generate Bills — {fmtMonth(month, year)}</div>
-            <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
-              Generates bills for all active customers. Customers with no entries will be skipped.
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button style={S.btn(C.muted)} onClick={() => setGenModal(false)}>Cancel</button>
-              <button style={S.btn(C.navy)} onClick={async () => {
-                setGenModal(false);
-                for (const c of customers) await generateBill(c);
-                load(); show("Bills generated!", "success");
-              }}>Generate All</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    </div>);})}
+    {editGroup&&(<div style={S.modalBg} onClick={()=>setEditGroup(null)}><div style={S.modal} onClick={e=>e.stopPropagation()}><div style={S.modalHandle}/><div style={S.modalName}>✏️ Edit Group</div><input style={S.formInput} value={editGroup.name} onChange={e=>setEditGroup(g=>({...g,name:e.target.value}))}/><input style={S.formInput} value={editGroup.delivery_boy_name||""} onChange={e=>setEditGroup(g=>({...g,delivery_boy_name:e.target.value}))} placeholder="Delivery boy name"/><div style={S.modalActions}><button style={S.btnCancel} onClick={()=>setEditGroup(null)}>Cancel</button><button style={S.btnSave} onClick={async()=>{await updateArea(editGroup.id,editGroup.name,editGroup.delivery_boy_name);setEditGroup(null);load();}}>Save</button></div></div></div>)}
+    {editSg&&(<div style={S.modalBg} onClick={()=>setEditSg(null)}><div style={S.modal} onClick={e=>e.stopPropagation()}><div style={S.modalHandle}/><div style={S.modalName}>✏️ Edit Subgroup</div><input style={S.formInput} value={editSg.name} onChange={e=>setEditSg(sg=>({...sg,name:e.target.value}))}/><div style={S.modalActions}><button style={S.btnCancel} onClick={()=>setEditSg(null)}>Cancel</button><button style={S.btnSave} onClick={async()=>{await updateSubgroup(editSg.id,editSg.name);setEditSg(null);load();}}>Save</button></div></div></div>)}
+  </div>);
 }
 
-// ─── PAYMENTS ────────────────────────────────────────────────────────────────
-function OwnerPayments({ show }) {
-  const [payments, setPayments] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => { load(); }, []);
-
-  async function load() {
-    setLoading(true);
-    try { setPayments(await DB.getPendingPayments()); } catch { show("Failed to load", "error"); }
-    setLoading(false);
-  }
-
-  if (loading) return <div style={{ textAlign: "center", padding: 40 }}>Loading...</div>;
-
-  return (
-    <div>
-      <div style={{ fontWeight: 700, marginBottom: 12 }}>⏳ Pending Confirmations ({payments.length})</div>
-      {payments.length === 0 ? (
-        <div style={{ ...S.card, textAlign: "center", color: C.muted, padding: 32 }}>No pending payments 🎉</div>
-      ) : payments.map(p => (
-        <div key={p.id} style={S.card}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-            <div>
-              <div style={{ fontWeight: 700 }}>{p.customers?.name}</div>
-              <div style={{ fontSize: 12, color: C.muted }}>{fmtDate(p.payment_date)} · {p.payment_method}</div>
-              {p.transaction_ref && <div style={{ fontSize: 12 }}>TxnRef: ...{p.transaction_ref}</div>}
-            </div>
-            <div style={{ fontWeight: 800, fontSize: 18, color: C.success }}>₹{p.amount}</div>
-          </div>
-          {p.screenshot_url && <a href={p.screenshot_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: C.info }}>📷 View Screenshot</a>}
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button style={{ ...S.btn(C.success), flex: 1, justifyContent: "center" }} onClick={async () => { await DB.updatePayment(p.id, "confirmed"); show("Confirmed!", "success"); load(); }}>✅ Confirm</button>
-            <button style={{ ...S.btn(C.danger), flex: 1, justifyContent: "center" }} onClick={async () => { await DB.updatePayment(p.id, "rejected"); show("Rejected", "warning"); load(); }}>❌ Reject</button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+function BrandManagement() {
+  const [brands,setBrands]=useState([]); const [loading,setLoading]=useState(true); const [showAdd,setShowAdd]=useState(false); const [editBrand,setEditBrand]=useState(null); const [form,setForm]=useState({name:"",rate:""}); const [saving,setSaving]=useState(false);
+  useEffect(()=>{load();},[]);
+  const load=async()=>{setLoading(true);try{setBrands(await getBrands()||[]);}catch{setBrands([]);}setLoading(false);};
+  const doSave=async()=>{if(!form.name.trim()||!form.rate){alert("Enter brand name and rate");return;}setSaving(true);try{if(editBrand)await updateBrand(editBrand.id,form.name.trim(),form.rate);else await addBrand(form.name.trim(),form.rate);setShowAdd(false);setEditBrand(null);setForm({name:"",rate:""});load();}catch(e){alert("Error: "+e.message);}setSaving(false);};
+  const doDelete=async(b)=>{if(!window.confirm(`Remove "${b.name}"?`))return;try{await deleteBrand(b.id);load();}catch(e){alert("Error: "+e.message);}};
+  return(<div style={{marginTop:8}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><div style={{fontSize:14,color:"#555"}}>{brands.length} brands</div><button style={S.btnPrimary} onClick={()=>{setShowAdd(true);setEditBrand(null);setForm({name:"",rate:""});}}>+ Add Brand</button></div>{loading?<Loader/>:brands.length===0?<EmptyState icon="🥛" message="No brands yet"/>:brands.map((b,i)=>(<div key={b.id} style={S.listCard}><div style={{width:4,height:44,borderRadius:2,background:["#1a6b3c","#1565C0","#6a1b9a","#c62828"][i%4],flexShrink:0}}/><div style={{flex:1}}><div style={{fontWeight:500}}>{b.name}</div><div style={{fontSize:12,color:"#888"}}>₹{b.rate}/litre</div></div><div style={{display:"flex",gap:6}}><button style={{fontSize:12,padding:"5px 10px",background:"#e8f5ee",border:"0.5px solid #b8dfc8",borderRadius:8,color:"#1a6b3c",cursor:"pointer"}} onClick={()=>{setEditBrand(b);setForm({name:b.name,rate:String(b.rate)});setShowAdd(true);}}>✏️ Edit</button><button style={{fontSize:12,padding:"5px 10px",background:"#fdf2f3",border:"0.5px solid #f5c6cb",borderRadius:8,color:"#c62828",cursor:"pointer"}} onClick={()=>doDelete(b)}>🗑</button></div></div>))}{showAdd&&(<div style={S.modalBg} onClick={()=>setShowAdd(false)}><div style={S.modal} onClick={e=>e.stopPropagation()}><div style={S.modalHandle}/><div style={S.modalName}>{editBrand?"Edit Brand":"Add Brand"}</div><label style={S.formLabel}>Brand Name</label><input style={S.formInput} placeholder="e.g. Jersey Full Cream" value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))}/><label style={S.formLabel}>Rate (₹ per litre)</label><input style={S.formInput} type="text" inputMode="decimal" placeholder="e.g. 68" value={form.rate} onChange={e=>setForm(p=>({...p,rate:e.target.value}))}/><div style={S.modalActions}><button style={S.btnCancel} onClick={()=>setShowAdd(false)}>Cancel</button><button style={S.btnSave} onClick={doSave} disabled={saving}>{saving?"Saving...":"Save Brand"}</button></div></div></div>)}</div>);
 }
 
-// ─── REPORTS ─────────────────────────────────────────────────────────────────
-function OwnerReports({ show }) {
-  const [customers, setCustomers] = useState([]);
-  const [brands, setBrands] = useState([]);
-  const [bills, setBills] = useState([]);
-  const [entries, setEntries] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const now = new Date();
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
+function OpeningBalanceSetup() {
+  const [customers,setCustomers]=useState([]); const [balances,setBalances]=useState({}); const [saving,setSaving]=useState(false); const [done,setDone]=useState(false); const [loading,setLoading]=useState(true);
+  useEffect(()=>{getCustomers().then(d=>{setCustomers(d||[]);setLoading(false);}).catch(()=>setLoading(false));},[]);
+  const saveAll=async()=>{setSaving(true);try{for(const c of customers){const bal=parseFloat(balances[c.id]!==undefined?balances[c.id]:c.outstanding||0);await updateCustomer(c.id,{outstanding:bal});}setDone(true);}catch(e){alert("Error: "+e.message);}setSaving(false);};
+  if(done)return<div style={{textAlign:"center",padding:32}}><div style={{fontSize:56}}>✅</div><div style={{fontSize:20,fontWeight:600,color:"#1a6b3c",marginTop:12}}>Balances Saved!</div></div>;
+  const total=Object.values(balances).reduce((s,v)=>s+(parseFloat(v)||0),0);
+  return(<div style={{marginTop:8}}><div style={{background:"#e8f5ee",border:"1px solid #b8dfc8",borderRadius:10,padding:12,marginBottom:12,fontSize:13,color:"#2d7a50"}}>Enter how much each customer owed before MilkFlow. Leave blank for 0.</div>{total>0&&<div style={{background:"#fff3cd",borderRadius:10,padding:"10px 14px",marginBottom:12,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,color:"#856404"}}>Total to migrate</span><span style={{fontWeight:600,color:"#856404"}}>{fmtCurrency(total)}</span></div>}{loading?<Loader/>:customers.length===0?<EmptyState icon="👥" message="No customers yet"/>:customers.map(c=>(<div key={c.id} style={S.listCard}><Avatar name={c.name} size={40}/><div style={{flex:1}}><div style={{fontWeight:500,fontSize:14}}>{c.name}</div><div style={{fontSize:12,color:"#888"}}>{c.code} • OB: {fmtCurrency(c.outstanding||0)}</div></div><div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:15,color:"#888"}}>₹</span><input type="text" inputMode="decimal" placeholder={String(c.outstanding||0)} value={balances[c.id]!==undefined?balances[c.id]:""} onChange={e=>setBalances(p=>({...p,[c.id]:e.target.value}))} style={{width:88,padding:"8px 10px",border:"0.5px solid #ddd",borderRadius:8,fontSize:15,textAlign:"right",background:"white",color:"#111"}}/></div></div>))}{customers.length>0&&<button style={{...S.btnSave,width:"100%",padding:14,fontSize:15,marginTop:8}} onClick={saveAll} disabled={saving}>{saving?"Saving...":"✅ Save All Balances"}</button>}</div>);
+}
 
-  useEffect(() => { load(); }, [month, year]);
+function MonthLockSection() {
+  const [locked,setLocked]=useState(false); const [lockedMonth,setLockedMonth]=useState(""); const [pin,setPin]=useState(""); const [loading,setLoading]=useState(true);
+  const now=new Date(); const current=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+  useEffect(()=>{getSetting("locked_month").then(v=>{if(v){setLockedMonth(v);setLocked(v===current);}setLoading(false);}).catch(()=>setLoading(false));},[]);
+  const doAction=async()=>{if(pin!==OWNER_PIN){alert("Wrong PIN");setPin("");return;}try{if(locked){await setSetting("locked_month","");setLocked(false);setLockedMonth("");}else{await setSetting("locked_month",current);setLocked(true);setLockedMonth(current);}setPin("");}catch(e){alert("Error: "+e.message);}};
+  if(loading)return<Loader/>;
+  return(<div style={{marginTop:8}}><div style={{background:locked?"#fdf2f3":"#e8f5ee",border:`1px solid ${locked?"#f5c6cb":"#b8dfc8"}`,borderRadius:12,padding:16,marginBottom:14,textAlign:"center"}}><div style={{fontSize:40,marginBottom:8}}>{locked?"🔒":"🔓"}</div><div style={{fontWeight:600,fontSize:16,color:locked?"#721c24":"#1a6b3c"}}>{locked?`${lockedMonth} is Locked`:"Current month is Open"}</div></div><div style={{background:"white",border:"0.5px solid #eee",borderRadius:12,padding:16}}><label style={S.formLabel}>Enter Owner PIN to {locked?"Unlock":"Lock"}</label><input type="password" maxLength={4} inputMode="numeric" placeholder="••••" style={{...S.formInput,letterSpacing:10,fontSize:22,textAlign:"center"}} value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,"").slice(0,4))}/><button style={{...S.btnSave,width:"100%",background:locked?"#c62828":"#1a6b3c"}} onClick={doAction}>{locked?"🔓 Unlock Month":`🔒 Lock ${current}`}</button></div></div>);
+}
 
-  async function load() {
+function AboutSection() {
+  return(<div style={{background:"white",border:"0.5px solid #eee",borderRadius:12,padding:16,marginTop:8}}><div style={{textAlign:"center",marginBottom:16}}><img src={logo_app} style={{width:72,height:72,borderRadius:14,objectFit:"contain"}} alt="logo"/><div style={{fontWeight:700,fontSize:16,marginTop:8}}>MilkFlow v3.2</div><div style={{fontSize:12,color:"#888"}}>Saikrishna Milk Supply</div></div>{[["UPI ID",UPI_ID],["Owner URL",window.location.origin+"/owner"],["Entry URL",window.location.origin+"/entry"],["Customer URL",window.location.origin+"/c/CODE"],["Bill URL",window.location.origin+"/bill/CODE"]].map(([k,v])=>(<div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:8,paddingBottom:8,borderBottom:"0.5px solid #f5f5f5"}}><span style={{color:"#888"}}>{k}</span><span style={{fontWeight:500,fontSize:11,color:"#555",wordBreak:"break-all",textAlign:"right",maxWidth:"60%"}}>{v}</span></div>))}</div>);
+}
+
+function CustomerPortal({customerCode}) {
+  const [customer,setCustomer]=useState(null); const [bill,setBill]=useState(null); const [ownerEntries,setOwnerEntries]=useState([]); const [custEntries,setCustEntries]=useState([]); const [tab,setTab]=useState("home"); const [loading,setLoading]=useState(true);
+  const now=new Date(); const month=now.getMonth()+1; const year=now.getFullYear();
+  useEffect(()=>{load();},[]);
+  const load=async()=>{
     setLoading(true);
-    try {
-      const [c, b, bi, e] = await Promise.all([
-        DB.getActiveCustomers(), DB.getBrands(), DB.getBills(), DB.getDailyEntries(today()),
+    try{
+      const custs=await db("customers","GET",null,`?code=eq.${customerCode}&limit=1&select=*,areas(name),subgroups(name),milk_brands(name,rate)`);
+      const cust=custs?.[0]; if(!cust){setLoading(false);return;} setCustomer(cust);
+      const startDate=`${year}-${String(month).padStart(2,"0")}-01`; const endDate=new Date(year,month,0).toISOString().split("T")[0];
+      const [bills,oe,ce]=await Promise.all([
+        db("bills","GET",null,`?customer_id=eq.${cust.id}&month=eq.${month}&year=eq.${year}&limit=1`),
+        db("daily_entries","GET",null,`?customer_id=eq.${cust.id}&entry_date=gte.${startDate}&entry_date=lte.${endDate}&order=entry_date.asc&select=entry_date,quantity,amount,brand_id`),
+        db("customer_entries","GET",null,`?customer_id=eq.${cust.id}&entry_date=gte.${startDate}&entry_date=lte.${endDate}&order=entry_date.desc&select=entry_date,quantity`),
       ]);
-      setCustomers(c); setBrands(b); setBills(bi); setEntries(e);
-    } catch { show("Failed", "error"); }
+      setBill(bills?.[0]||null); setOwnerEntries(oe||[]); setCustEntries(ce||[]);
+    }catch(e){console.error(e);}
     setLoading(false);
-  }
-
-  // Procurement by brand — actual today or planned
-  const procurementByBrand = {};
-  brands.forEach(b => { procurementByBrand[b.id] = { name: b.name, rate: b.rate, actual: 0, planned: 0 }; });
-  entries.forEach(e => { if (procurementByBrand[e.brand_id]) procurementByBrand[e.brand_id].actual += e.quantity; });
-  customers.forEach(c => { if (procurementByBrand[c.brand_id]) procurementByBrand[c.brand_id].planned += c.default_qty || 0; });
-  const isActual = entries.length > 0;
-
-  // Payment reminders for this month
-  const monthBills = bills.filter(b => b.month === month && b.year === year);
-  const unpaid = monthBills.filter(b => b.status === "unpaid" || b.status === "partial");
-  const today_ = new Date();
-  const dayOfMonth = today_.getDate();
-
-  function reminderLevel(days) {
-    if (days >= 20) return { label: "🔴 Final Notice", color: C.danger };
-    if (days >= 15) return { label: "🟠 Firm Reminder", color: C.warning };
-    if (days >= 10) return { label: "🟡 Gentle Reminder", color: C.gold };
-    return null;
-  }
-
-  // Export CSV
-  function exportCSV() {
-    const rows = [["Code","Name","Phone","Group","Subgroup","Brand","Default Qty","Outstanding"]];
-    customers.forEach(c => {
-      rows.push([
-        c.code, c.name, c.phone,
-        c.areas?.name || "", c.subgroups?.name || "",
-        c.milk_brands?.name || "", c.default_qty, c.outstanding || 0,
-      ]);
-    });
-    const csv = rows.map(r => r.join(",")).join("\n");
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    a.download = `milkflow_customers_${today()}.csv`;
-    a.click();
-  }
-
-  function supplierWAMessage() {
-    const lines = Object.values(procurementByBrand)
-      .filter(b => (isActual ? b.actual : b.planned) > 0)
-      .map(b => `• ${b.name}: ${isActual ? b.actual : b.planned}L`);
-    return `🥛 Saikrishna Milk Supply\nMilk Order for ${fmtDate(today())}\n\n${lines.join("\n")}\n\n${isActual ? "✅ Actual delivered quantities" : "📋 Planned quantities"}`;
-  }
-
-  if (loading) return <div style={{ textAlign: "center", padding: 40 }}>Loading...</div>;
-
-  return (
-    <div>
-      {/* Procurement */}
-      <div style={S.card}>
-        <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>🥛 Today's Procurement Estimate</div>
-        <div style={{ fontSize: 12, color: isActual ? C.success : C.warning, marginBottom: 12 }}>
-          {isActual ? "✅ Showing actual delivered quantities" : "📋 Showing planned quantities (no entries yet today)"}
-        </div>
-        {Object.values(procurementByBrand).map(b => {
-          const qty = isActual ? b.actual : b.planned;
-          if (qty === 0) return null;
-          return (
-            <div key={b.name} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
-              <span style={{ fontWeight: 600 }}>{b.name}</span>
-              <span style={{ fontWeight: 700 }}>{qty}L &nbsp;<span style={{ color: C.muted, fontWeight: 400 }}>₹{(qty * b.rate).toFixed(0)}</span></span>
-            </div>
-          );
-        })}
-        <button style={{ ...S.btn(C.success), marginTop: 12, width: "100%", justifyContent: "center" }}
-          onClick={() => window.open(waLink(WA_NUMBER, supplierWAMessage()), "_blank")}>
-          📲 Send Order to Supplier via WhatsApp
-        </button>
-      </div>
-
-      {/* Payment Reminders */}
-      <div style={S.card}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>⏰ Payment Reminders</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <select style={{ ...S.input, width: "auto", fontSize: 12 }} value={month} onChange={e => setMonth(+e.target.value)}>
-              {Array.from({ length: 12 }, (_, i) => <option key={i + 1} value={i + 1}>{new Date(2000, i).toLocaleString("en-IN", { month: "short" })}</option>)}
-            </select>
-            <select style={{ ...S.input, width: "auto", fontSize: 12 }} value={year} onChange={e => setYear(+e.target.value)}>
-              {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-          </div>
-        </div>
-
-        {unpaid.length === 0 ? (
-          <div style={{ textAlign: "center", color: C.muted, padding: 16 }}>All bills paid for this month 🎉</div>
-        ) : unpaid.map(bill => {
-          const customer = customers.find(c => c.id === bill.customer_id);
-          if (!customer) return null;
-          const level = reminderLevel(dayOfMonth);
-          const reminderMsg = `🥛 Saikrishna Milk Supply\nDear ${customer.name},\n\nThis is a reminder for your ${fmtMonth(bill.month, bill.year)} milk bill.\n💰 Amount Due: ₹${bill.total_amount}\n\n👉 Pay via UPI: ${UPI_ID}\n\nView your bill: ${BASE_URL}/c/${customer.code}\n\nPlease clear your dues at the earliest. Thank you 🙏`;
-          return (
-            <div key={bill.id} style={{ padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>{customer.name}</div>
-                  <div style={{ fontSize: 12, color: C.muted }}>{customer.code}</div>
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontWeight: 800, color: C.danger }}>₹{bill.total_amount}</div>
-                  {level && <div style={{ fontSize: 11, color: level.color, fontWeight: 700 }}>{level.label}</div>}
-                </div>
-              </div>
-              {customer.phone && (
-                <button style={{ ...S.btnSm(C.success), width: "100%" }}
-                  onClick={() => window.open(waLink(customer.phone, reminderMsg), "_blank")}>
-                  💬 Send Reminder via WhatsApp
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Export */}
-      <div style={S.card}>
-        <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 8 }}>📤 Export Data</div>
-        <button style={{ ...S.btn(C.navy), width: "100%", justifyContent: "center" }} onClick={exportCSV}>
-          ⬇️ Export Customer List (CSV)
-        </button>
-      </div>
+  };
+  if(loading)return<div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",flexDirection:"column",gap:12}}><img src={logo_app} style={{width:72,height:72,borderRadius:16,objectFit:"contain"}} alt="loading"/><div style={{fontSize:14,color:"#888"}}>Loading...</div></div>;
+  if(!customer)return<div style={{textAlign:"center",padding:60}}><div style={{fontSize:40}}>😕</div><div style={{fontWeight:600,fontSize:18,marginBottom:8}}>Customer not found</div><div style={{fontSize:13,color:"#888"}}>Check your link. It should be:<br/>{BASE_URL}/c/YOUR_CODE</div></div>;
+  return(<div style={S.screen}>
+    <div style={{background:"#1565C0",padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}><img src={logo_app} style={{width:36,height:36,borderRadius:8,objectFit:"contain",background:"white",padding:2}} alt="logo"/><div style={{color:"white"}}><div style={{fontSize:14,fontWeight:500}}>Saikrishna Milk Supply</div><div style={{fontSize:12,opacity:0.85}}>Your milk account</div></div></div>
+    <div style={{flex:1,overflowY:"auto"}}>
+      {tab==="home"&&<PortalHome customer={customer} bill={bill} ownerEntries={ownerEntries} setTab={setTab}/>}
+      {tab==="records"&&<PortalRecords customer={customer} ownerEntries={ownerEntries} custEntries={custEntries} month={month} year={year} onRefresh={load}/>}
+      {tab==="bill"&&<PortalBillTab bill={bill} customer={customer} month={month} year={year} entries={ownerEntries} setTab={setTab}/>}
+      {tab==="pay"&&<PortalPay bill={bill} customer={customer}/>}
     </div>
-  );
+    <div style={S.bottomNav}>{[["home","🏠","Home"],["records","📋","Records"],["bill","🧾","Bill"],["pay","💳","Pay"]].map(([id,icon,label])=>(<button key={id} style={{...S.navBtn,...(tab===id?S.navBtnActiveBlue:{})}} onClick={()=>setTab(id)}><span style={{fontSize:18}}>{icon}</span><span style={{fontSize:10,marginTop:2}}>{label}</span></button>))}</div>
+  </div>);
 }
 
-// ─── SETTINGS ────────────────────────────────────────────────────────────────
-function OwnerSettings({ show }) {
-  const [tab, setTab] = useState("groups");
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {[{ id: "groups", label: "📍 Groups" }, { id: "brands", label: "🥛 Brands" }].map(t => (
-          <button key={t.id} style={S.btn(tab === t.id ? C.navy : C.border, tab === t.id ? C.white : C.text)}
-            onClick={() => setTab(t.id)}>{t.label}</button>
+function PortalHome({customer,bill,ownerEntries,setTab}) {
+  return(<div style={{padding:16}}>
+    <div style={{fontSize:18,fontWeight:600,marginBottom:2}}>Hello, {customer?.name?.split(" ")[0]} 👋</div>
+    <div style={{fontSize:13,color:"#888",marginBottom:16}}>Account: {customer?.code}</div>
+    <div style={S.statsGrid}><StatCard label="Daily Milk" value={(customer?.default_qty||1)+"L"} icon="🥛" color="#1565C0"/><StatCard label="Days Recorded" value={ownerEntries.length} icon="📅" color="#e65100"/><StatCard label="Bill Amount" value={fmtCurrency(bill?.total_amount)} icon="🧾" color="#1a6b3c"/><StatCard label="Status" value={bill?.status==="paid"?"✅ Paid":"⏳ Due"} icon="💳" color={bill?.status==="paid"?"#2E7D32":"#c62828"}/></div>
+    {bill&&bill.status!=="paid"&&<div style={S.alertBox}><span style={{fontSize:18}}>💳</span><div><div style={{fontWeight:500,fontSize:14}}>Amount Due: {fmtCurrency(bill.total_amount)}</div><div style={{fontSize:12,color:"#856404"}}>Tap Pay to pay and confirm</div></div></div>}
+    <div style={{display:"flex",gap:10,marginBottom:16}}>{[["🧾","View Bill","bill"],["💳","Pay Now","pay"],["📋","Records","records"]].map(([icon,label,t])=>(<button key={t} style={{flex:1,background:"white",border:"1px solid #eee",borderRadius:12,padding:"12px 6px",display:"flex",flexDirection:"column",alignItems:"center",gap:5,cursor:"pointer"}} onClick={()=>setTab(t)}><span style={{fontSize:24}}>{icon}</span><span style={{fontSize:11,color:"#555",fontWeight:500}}>{label}</span></button>))}</div>
+  </div>);
+}
+
+function PortalRecords({customer,ownerEntries,custEntries,month,year,onRefresh}) {
+  const [showEntry,setShowEntry]=useState(false); const [selectedQty,setSelectedQty]=useState(null); const [customQty,setCustomQty]=useState(""); const [saving,setSaving]=useState(false);
+  const custMap={}; custEntries.forEach(e=>{custMap[e.entry_date]=e.quantity;});
+  const todayRecorded=custMap[nowDate()]!==undefined;
+  const doSave=async()=>{let qty;if(selectedQty===-1){qty=parseFloat(customQty);if(isNaN(qty)||qty<0)return;}else if(selectedQty===null)return;else qty=selectedQty;setSaving(true);try{await saveCustomerEntry(customer.id,qty);setShowEntry(false);setSelectedQty(null);if(onRefresh)onRefresh();}catch(e){alert("Error: "+e.message);}setSaving(false);};
+  return(<div style={{padding:16}}>
+    <div style={S.sectionTitle}>📋 {monthLabel(month,year)} Records</div>
+    <div style={{background:"#e8f5ee",borderRadius:12,padding:14,marginBottom:14}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:13,color:"#2d7a50"}}>Days recorded by us</span><span style={{fontWeight:600}}>{ownerEntries.length} ✅</span></div><div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,color:"#2d7a50"}}>Days recorded by you</span><span style={{fontWeight:600}}>{custEntries.length} 📝</span></div></div>
+    <div style={{background:"white",border:`2px solid ${todayRecorded?"#1a6b3c":"#ffc107"}`,borderRadius:12,padding:14,marginBottom:14}}><div style={{fontWeight:500,fontSize:14,marginBottom:6}}>{todayRecorded?"✅ Today recorded":"📝 Record today's milk"}</div>{todayRecorded?<div style={{fontSize:13,color:"#888"}}>You recorded {custMap[nowDate()]}L today</div>:<button style={{...S.btnSave,width:"100%",padding:12}} onClick={()=>setShowEntry(true)}>📝 Record Today's Milk</button>}</div>
+    {ownerEntries.slice(0,25).map((e,i)=>(<div key={i} style={{...S.listCard,padding:"10px 12px"}}><div style={{fontSize:13,color:"#888",minWidth:55}}>{fmtDate(e.entry_date)}</div><div style={{flex:1,fontSize:14,fontWeight:500}}>{e.quantity}L</div><div style={{fontSize:12,color:custMap[e.entry_date]!==undefined?"#1a6b3c":"#bbb"}}>{custMap[e.entry_date]!==undefined?`✅ ${custMap[e.entry_date]}L`:"—"}</div></div>))}
+    {showEntry&&(<div style={S.modalBg} onClick={()=>setShowEntry(false)}><div style={S.modal} onClick={e=>e.stopPropagation()}><div style={S.modalHandle}/><div style={S.modalName}>📝 Record Today's Milk</div><div style={S.prevBox}><span style={{fontSize:13,color:"#2d7a50"}}>Your usual:</span><span style={{fontSize:18,fontWeight:600,color:"#1a6b3c"}}>{customer?.default_qty||1}L</span></div><div style={S.qtyGrid}>{QTY_OPTIONS.map(q=><button key={q} style={{...S.qtyOption,...(selectedQty===q?S.qtyOptionSel:{})}} onClick={()=>{setSelectedQty(q);setCustomQty("");}}>{q}</button>)}<button style={{...S.qtyOption,...(selectedQty===0?S.qtyOptionSel:{}),color:"#c0392b",borderColor:"#f5c6cb",background:"#fdf2f3",fontSize:13}} onClick={()=>{setSelectedQty(0);setCustomQty("");}}>🚫<br/><span style={{fontSize:10}}>None</span></button><button style={{...S.qtyOption,...(selectedQty===-1?S.qtyOptionSel:{}),fontSize:13}} onClick={()=>setSelectedQty(-1)}>✏️<br/><span style={{fontSize:10}}>Other</span></button></div>{selectedQty===-1&&<div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><input type="number" step="0.5" min="0" placeholder="0.0" value={customQty} onChange={e=>setCustomQty(e.target.value)} style={{flex:1,fontSize:18,padding:"10px 14px",border:"0.5px solid #ddd",borderRadius:10,background:"white",color:"#111"}} autoFocus/><span style={{fontSize:13,color:"#888"}}>Litres</span></div>}<div style={S.modalActions}><button style={S.btnCancel} onClick={()=>setShowEntry(false)}>Cancel</button><button style={S.btnSave} onClick={doSave} disabled={saving||selectedQty===null}>{saving?"Saving...":"✅ Save"}</button></div></div></div>)}
+  </div>);
+}
+
+function PortalBillTab({bill,customer,month,year,entries,setTab}) {
+  if(!bill)return<EmptyState icon="🧾" message="No bill generated yet for this month."/>;
+  return(<div style={{padding:"8px 0 0"}}>
+    <div style={{background:"#fff3cd",border:"1px solid #ffc107",borderRadius:12,padding:14,margin:"0 16px 12px"}}><div style={{fontWeight:600,fontSize:14,color:"#856404",marginBottom:6}}>🔔 Important</div><div style={{fontSize:13,color:"#856404",lineHeight:1.7}}>To confirm payment, go to the <strong>Pay</strong> tab → tap <strong>"I Have Paid"</strong> → share your screenshot on WhatsApp. Unconfirmed payments show as <strong>Outstanding</strong> on next bill.</div></div>
+    <BillDetailView bill={bill} customer={customer} month={month} year={year} entries={entries}/>
+    <div style={{padding:"0 16px 24px"}}><button style={{...S.btnSave,width:"100%",padding:14,fontSize:15}} onClick={()=>setTab("pay")}>💳 Go to Pay →</button></div>
+  </div>);
+}
+
+function PortalPay({bill,customer}) {
+  const [step,setStep]=useState("pay"); const [submitting,setSubmitting]=useState(false);
+  const submitPaid=async()=>{
+    setSubmitting(true);
+    try{
+      await addPayment({customer_id:customer?.id,amount:bill?.total_amount||0,payment_method:"upi",status:"pending_confirmation",notes:`Customer confirmed via portal. ${new Date().toLocaleString("en-IN")}`});
+      setStep("done");
+    }catch{setStep("done");}
+    setSubmitting(false);
+  };
+  if(!bill)return<EmptyState icon="🧾" message="No bill for this month yet"/>;
+  if(step==="done")return(<div style={{padding:16,textAlign:"center"}}><div style={{fontSize:60,marginBottom:12}}>✅</div><div style={{fontSize:20,fontWeight:600,color:"#1a6b3c",marginBottom:8}}>Payment Recorded!</div><div style={{fontSize:13,color:"#555",marginBottom:20,lineHeight:1.7,background:"#e8f5ee",borderRadius:12,padding:14}}>Your payment is waiting for owner confirmation.<br/><br/><strong>Please share your payment screenshot on WhatsApp</strong> to confirm ✅</div><a href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(`Hi, sharing payment screenshot for ${monthLabel(new Date().getMonth()+1,new Date().getFullYear())} bill — ${customer?.name} (${customer?.code})`)}`} style={{...S.btnSave,display:"block",textAlign:"center",textDecoration:"none",background:"#25D366",padding:14,fontSize:15}}>📸 Share Screenshot on WhatsApp</a></div>);
+  return(<div style={{padding:16}}>
+    <div style={S.sectionTitle}>💳 Pay Your Bill</div>
+    <div style={{background:"#fff3cd",border:"1px solid #ffc107",borderRadius:12,padding:14,marginBottom:16}}><div style={{fontWeight:600,fontSize:14,color:"#856404",marginBottom:6}}>🔔 Read Before Paying</div><div style={{fontSize:13,color:"#856404",lineHeight:1.7}}>Pay via UPI below, then tap <strong>"I Have Paid"</strong> and share your screenshot on WhatsApp. Without confirmation, payment shows as <strong>Outstanding</strong> on next month's bill.</div></div>
+    <div style={{background:"white",border:"0.5px solid #eee",borderRadius:12,padding:16,marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{color:"#888",fontSize:14}}>Amount Due</span><span style={{fontWeight:700,fontSize:22,color:"#c62828"}}>{fmtCurrency(bill.total_amount)}</span></div>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}><span style={{color:"#888"}}>UPI ID</span><span style={{fontWeight:600}}>{UPI_ID}</span></div>
+    </div>
+    <a href={`upi://pay?pa=${UPI_ID}&pn=Saikrishna+Milk+Supply&am=${bill?.total_amount||0}&cu=INR&tn=MF-${customer?.code||""}`} style={{...S.btnSave,display:"block",textAlign:"center",padding:15,fontSize:16,fontWeight:600,textDecoration:"none",marginBottom:12}}>📱 Pay via GPay / PhonePe / Paytm</a>
+    <button style={{...S.btnCancel,width:"100%",padding:14,fontSize:14,fontWeight:600,border:"2px solid #1a6b3c",color:"#1a6b3c",marginBottom:8}} onClick={submitPaid} disabled={submitting}>{submitting?"Recording...":"✅ I Have Paid — Click Only If You Have Actually Paid"}</button>
+    <a href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(`Hi, sharing payment screenshot — ${customer?.name} (${customer?.code})`)}`} style={{display:"block",textAlign:"center",padding:"10px 0",fontSize:13,color:"#25D366",textDecoration:"none"}}>📸 Share Screenshot on WhatsApp →</a>
+  </div>);
+}
+
+function BillPage({customerCode}) {
+  const [bill,setBill]=useState(null); const [customer,setCustomer]=useState(null); const [entries,setEntries]=useState([]); const [loading,setLoading]=useState(true);
+  const now=new Date(); const month=now.getMonth()+1; const year=now.getFullYear();
+  useEffect(()=>{load();},[]);
+  const load=async()=>{
+    setLoading(true);
+    try{
+      const custs=await db("customers","GET",null,`?code=eq.${customerCode}&limit=1&select=*,milk_brands(name,rate)`);
+      const cust=custs?.[0]; if(!cust){setLoading(false);return;} setCustomer(cust);
+      const bills=await db("bills","GET",null,`?customer_id=eq.${cust.id}&month=eq.${month}&year=eq.${year}&limit=1`);
+      const b=bills?.[0]; setBill(b||null);
+      if(b){const e=await getMonthEntries(cust.id,month,year);setEntries(e||[]);}
+    }catch(e){console.error(e);}
+    setLoading(false);
+  };
+  if(loading)return<div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",flexDirection:"column",gap:12}}><img src={logo_app} style={{width:72,height:72,borderRadius:16,objectFit:"contain"}} alt="loading"/><div style={{fontSize:14,color:"#888"}}>Loading bill...</div></div>;
+  if(!customer)return<EmptyState icon="❌" message="Customer not found"/>;
+  if(!bill)return<EmptyState icon="🧾" message="No bill generated yet for this month"/>;
+  return<div style={{background:"#f8f9fa",minHeight:"100vh"}}><BillDetailView bill={bill} customer={customer} month={month} year={year} entries={entries}/></div>;
+}
+
+function SelectScreen() {
+  const [portalCode,setPortalCode]=useState("");
+  return(
+    <div style={{maxWidth:480,margin:"0 auto",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24,background:"#f8f9fa"}}>
+      <img src={logo_app} style={{width:100,height:100,borderRadius:20,objectFit:"contain",marginBottom:12}} alt="logo"/>
+      <div style={{fontSize:22,fontWeight:700,color:"#1a6b3c",marginBottom:4}}>Saikrishna Milk Supply</div>
+      <div style={{fontSize:13,color:"#888",marginBottom:32}}>MilkFlow v3.2</div>
+      <div style={{width:"100%",display:"flex",flexDirection:"column",gap:12}}>
+        {[["👑","Owner Dashboard","/owner"],["🥛","Owner's Register","/entry"]].map(([icon,label,path])=>(
+          <a key={path} href={path} style={{display:"flex",alignItems:"center",gap:14,background:"white",border:"1px solid #eee",borderRadius:14,padding:"16px 18px",textDecoration:"none",color:"#111"}}>
+            <span style={{fontSize:32}}>{icon}</span><div><div style={{fontWeight:600,fontSize:16}}>{label}</div><div style={{fontSize:12,color:"#888"}}>{window.location.origin}{path}</div></div><span style={{marginLeft:"auto",color:"#888"}}>→</span>
+          </a>
         ))}
-      </div>
-      {tab === "groups" && <GroupsManager show={show} />}
-      {tab === "brands" && <BrandsManager show={show} />}
-    </div>
-  );
-}
-
-function GroupsManager({ show }) {
-  const [areas, setAreas] = useState([]);
-  const [subgroups, setSubgroups] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [newGroup, setNewGroup] = useState({ name: "", delivery_boy_name: "" });
-  const [newSg, setNewSg] = useState({ area_id: "", name: "" });
-  const [editGroup, setEditGroup] = useState(null);
-  const [editSg, setEditSg] = useState(null);
-
-  useEffect(() => { load(); }, []);
-
-  async function load() {
-    setLoading(true);
-    try { const [a, sg] = await Promise.all([DB.getAreas(), DB.getSubgroups()]); setAreas(a); setSubgroups(sg); }
-    catch { show("Failed", "error"); }
-    setLoading(false);
-  }
-
-  if (loading) return <div style={{ textAlign: "center", padding: 40 }}>Loading...</div>;
-
-  return (
-    <div>
-      <div style={S.card}>
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>➕ Add Group</div>
-        <input style={{ ...S.input, marginBottom: 8 }} placeholder="Group name (e.g. JB Nagar)"
-          value={newGroup.name} onChange={e => setNewGroup(g => ({ ...g, name: e.target.value }))} />
-        <input style={{ ...S.input, marginBottom: 8 }} placeholder="Delivery boy name (optional)"
-          value={newGroup.delivery_boy_name} onChange={e => setNewGroup(g => ({ ...g, delivery_boy_name: e.target.value }))} />
-        <button style={S.btn(C.navy)} onClick={async () => {
-          if (!newGroup.name.trim()) return;
-          await DB.addArea(newGroup.name, newGroup.delivery_boy_name);
-          setNewGroup({ name: "", delivery_boy_name: "" }); load(); show("Group added");
-        }}>Add Group</button>
-      </div>
-
-      <div style={S.card}>
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>➕ Add Subgroup / Building</div>
-        <select style={{ ...S.input, marginBottom: 8 }} value={newSg.area_id}
-          onChange={e => setNewSg(sg => ({ ...sg, area_id: e.target.value }))}>
-          <option value="">-- Select Group --</option>
-          {areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
-        <input style={{ ...S.input, marginBottom: 8 }} placeholder="Subgroup name (e.g. Sumit A Wing)"
-          value={newSg.name} onChange={e => setNewSg(sg => ({ ...sg, name: e.target.value }))} />
-        <button style={S.btn(C.navy)} onClick={async () => {
-          if (!newSg.area_id || !newSg.name.trim()) return;
-          await DB.addSubgroup(newSg.area_id, newSg.name);
-          setNewSg({ area_id: "", name: "" }); load(); show("Subgroup added");
-        }}>Add Subgroup</button>
-      </div>
-
-      {areas.map(area => {
-        const areaSgs = subgroups.filter(sg => sg.area_id === area.id);
-        return (
-          <div key={area.id} style={{ marginBottom: 12 }}>
-            <div style={{ background: C.navy, color: C.white, padding: "9px 14px", borderRadius: "8px 8px 0 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <span style={{ fontWeight: 800, fontSize: 15 }}>📍 {area.name}</span>
-                {area.delivery_boy_name && <span style={{ fontSize: 13, opacity: 0.8 }}> / {area.delivery_boy_name}</span>}
-              </div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button style={S.btnSm(C.gold, C.navy)} onClick={() => setEditGroup(area)}>✏️</button>
-                <button style={S.btnSm(C.danger)} onClick={async () => {
-                  if (!confirm("Delete group? All subgroups will also be deleted.")) return;
-                  await DB.deleteArea(area.id); load(); show("Deleted");
-                }}>🗑</button>
-              </div>
-            </div>
-            <div style={{ border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 8px 8px" }}>
-              {areaSgs.length === 0
-                ? <div style={{ padding: "10px 14px", fontSize: 13, color: C.muted }}>No subgroups yet</div>
-                : areaSgs.map(sg => (
-                  <div key={sg.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 14px", borderBottom: `1px solid ${C.border}` }}>
-                    <span style={{ fontSize: 14, fontWeight: 600 }}>🏢 {sg.name}</span>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button style={S.btnSm(C.gold, C.navy)} onClick={() => setEditSg(sg)}>✏️</button>
-                      <button style={S.btnSm(C.danger)} onClick={async () => {
-                        if (!confirm("Delete subgroup?")) return;
-                        await DB.deleteSubgroup(sg.id); load(); show("Deleted");
-                      }}>🗑</button>
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-        );
-      })}
-
-      {editGroup && (
-        <div style={S.modal}>
-          <div style={{ ...S.modalBox, maxWidth: 360 }}>
-            <div style={{ fontWeight: 800, marginBottom: 12 }}>✏️ Edit Group</div>
-            <input style={{ ...S.input, marginBottom: 8 }} value={editGroup.name} onChange={e => setEditGroup(g => ({ ...g, name: e.target.value }))} />
-            <input style={{ ...S.input, marginBottom: 12 }} value={editGroup.delivery_boy_name || ""} onChange={e => setEditGroup(g => ({ ...g, delivery_boy_name: e.target.value }))} placeholder="Delivery boy name" />
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button style={S.btn(C.muted)} onClick={() => setEditGroup(null)}>Cancel</button>
-              <button style={S.btn(C.navy)} onClick={async () => { await DB.updateArea(editGroup.id, editGroup.name, editGroup.delivery_boy_name); setEditGroup(null); load(); show("Updated"); }}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {editSg && (
-        <div style={S.modal}>
-          <div style={{ ...S.modalBox, maxWidth: 360 }}>
-            <div style={{ fontWeight: 800, marginBottom: 12 }}>✏️ Edit Subgroup</div>
-            <input style={{ ...S.input, marginBottom: 12 }} value={editSg.name} onChange={e => setEditSg(sg => ({ ...sg, name: e.target.value }))} />
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button style={S.btn(C.muted)} onClick={() => setEditSg(null)}>Cancel</button>
-              <button style={S.btn(C.navy)} onClick={async () => { await DB.updateSubgroup(editSg.id, editSg.name); setEditSg(null); load(); show("Updated"); }}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function BrandsManager({ show }) {
-  const [brands, setBrands] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [newBrand, setNewBrand] = useState({ name: "", rate: "" });
-  const [editBrand, setEditBrand] = useState(null);
-
-  useEffect(() => { load(); }, []);
-  async function load() {
-    setLoading(true);
-    try { setBrands(await DB.getAllBrands()); } catch { show("Failed", "error"); }
-    setLoading(false);
-  }
-
-  if (loading) return <div style={{ textAlign: "center", padding: 40 }}>Loading...</div>;
-
-  return (
-    <div>
-      <div style={S.card}>
-        <div style={{ fontWeight: 700, marginBottom: 10 }}>➕ Add Brand</div>
-        <input style={{ ...S.input, marginBottom: 8 }} placeholder="Brand name" value={newBrand.name} onChange={e => setNewBrand(b => ({ ...b, name: e.target.value }))} />
-        <input style={{ ...S.input, marginBottom: 8 }} placeholder="Rate (₹/L)" type="number" value={newBrand.rate} onChange={e => setNewBrand(b => ({ ...b, rate: e.target.value }))} />
-        <button style={S.btn(C.navy)} onClick={async () => {
-          if (!newBrand.name || !newBrand.rate) return;
-          await DB.addBrand(newBrand.name, parseFloat(newBrand.rate));
-          setNewBrand({ name: "", rate: "" }); load(); show("Brand added");
-        }}>Add Brand</button>
-      </div>
-      {brands.map(b => (
-        <div key={b.id} style={{ ...S.card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div><div style={{ fontWeight: 700 }}>{b.name}</div><div style={{ fontSize: 13, color: C.muted }}>₹{b.rate}/L</div></div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button style={S.btnSm(C.gold, C.navy)} onClick={() => setEditBrand(b)}>✏️</button>
-            <button style={S.btnSm(C.danger)} onClick={async () => { if (!confirm("Delete brand?")) return; await DB.deleteBrand(b.id); load(); show("Deleted"); }}>🗑</button>
-          </div>
-        </div>
-      ))}
-      {editBrand && (
-        <div style={S.modal}>
-          <div style={{ ...S.modalBox, maxWidth: 360 }}>
-            <div style={{ fontWeight: 800, marginBottom: 12 }}>✏️ Edit Brand</div>
-            <input style={{ ...S.input, marginBottom: 8 }} value={editBrand.name} onChange={e => setEditBrand(b => ({ ...b, name: e.target.value }))} />
-            <input style={{ ...S.input, marginBottom: 12 }} type="number" value={editBrand.rate} onChange={e => setEditBrand(b => ({ ...b, rate: e.target.value }))} placeholder="Rate ₹/L" />
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button style={S.btn(C.muted)} onClick={() => setEditBrand(null)}>Cancel</button>
-              <button style={S.btn(C.navy)} onClick={async () => { await DB.updateBrand(editBrand.id, editBrand.name, parseFloat(editBrand.rate)); setEditBrand(null); load(); show("Updated"); }}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// FATHER'S ENTRY (/entry)
-// ═══════════════════════════════════════════════════════════════════════════════
-function FatherEntry() {
-  const [authed, setAuthed] = useState(false);
-  const [customers, setCustomers] = useState([]);
-  const [areas, setAreas] = useState([]);
-  const [subgroups, setSubgroups] = useState([]);
-  const [brands, setBrands] = useState([]);
-  const [entries, setEntries] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [date, setDate] = useState(today());
-  const [show, toast] = useToast();
-
-  useEffect(() => { if (authed) load(); }, [authed, date]);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const [c, a, sg, b, e] = await Promise.all([
-        DB.getActiveCustomers(), DB.getAreas(), DB.getSubgroups(), DB.getBrands(), DB.getDailyEntries(date),
-      ]);
-      setCustomers(c); setAreas(a); setSubgroups(sg); setBrands(b); setEntries(e);
-    } catch { show("Failed to load", "error"); }
-    setLoading(false);
-  }
-
-  if (!authed) return (
-    <PinModal title="Entry Login" correctPin={FATHER_PIN}
-      onSuccess={() => setAuthed(true)} onCancel={() => window.location.href = "/"} />
-  );
-
-  const entryMap = {};
-  entries.forEach(e => { entryMap[e.customer_id] = e; });
-
-  async function saveEntry(customer, qty) {
-    const brand = brands.find(b => b.id === customer.brand_id) || brands[0];
-    if (!brand) { show("No brand assigned", "error"); return; }
-    const rate = customer.custom_rate || brand.rate;
-    try {
-      await DB.upsertDailyEntry({ customer_id: customer.id, entry_date: date, brand_id: brand.id, quantity: qty, rate, submitted_by: "father" });
-      show("✅ Saved!", "success"); load();
-    } catch { show("Error saving", "error"); }
-  }
-
-  // Group: area → subgroup → customers
-  const grouped = {};
-  customers.forEach(c => {
-    const area = areas.find(a => a.id === c.area_id);
-    const sg = subgroups.find(s => s.id === c.subgroup_id);
-    const aKey = area?.id || "none";
-    const aLabel = area ? `${area.name}${area.delivery_boy_name ? " / " + area.delivery_boy_name : ""}` : "No Group";
-    const sgKey = sg?.id || "none";
-    const sgLabel = sg?.name || "No Subgroup";
-    if (!grouped[aKey]) grouped[aKey] = { label: aLabel, area, subs: {} };
-    if (!grouped[aKey].subs[sgKey]) grouped[aKey].subs[sgKey] = { label: sgLabel, sg, customers: [] };
-    grouped[aKey].subs[sgKey].customers.push(c);
-  });
-
-  const done = entries.length;
-  const total = customers.length;
-
-  return (
-    <div style={S.page}>
-      <div style={S.header}>
-        <img src={logo_app} alt="Logo" style={{ width: 32, height: 32, borderRadius: 6 }} />
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>Daily Entry</div>
-          <div style={{ fontSize: 11, opacity: 0.7 }}>{done}/{total} done · {fmtDate(date)}</div>
-        </div>
-        <input type="date" value={date} onChange={e => setDate(e.target.value)}
-          style={{ fontSize: 12, padding: "4px 8px", borderRadius: 6, border: "none" }} />
-      </div>
-
-      <div style={{ height: 4, background: C.border }}>
-        <div style={{ height: 4, background: C.success, width: `${total ? (done / total) * 100 : 0}%`, transition: "width 0.3s" }} />
-      </div>
-
-      <div style={{ padding: 12 }}>
-        {loading ? (
-          <div style={{ textAlign: "center", padding: 60, fontSize: 18 }}>Loading...</div>
-        ) : customers.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 60, color: C.muted }}>No customers added yet</div>
-        ) : (
-          Object.values(grouped).map(group => (
-            <div key={group.label} style={{ marginBottom: 16 }}>
-              {/* Group header — slightly bigger text */}
-              <div style={{ background: C.navy, color: C.white, padding: "11px 14px", borderRadius: "10px 10px 0 0", fontWeight: 800, fontSize: 16 }}>
-                📍 {group.label}
-              </div>
-              {Object.values(group.subs).map(sub => (
-                <div key={sub.label} style={{ border: `1px solid ${C.border}`, borderTop: "none" }}>
-                  {/* Subgroup header — slightly bigger text */}
-                  <div style={{ background: "#eef2ff", padding: "9px 14px", fontWeight: 700, fontSize: 15, color: C.navy, borderBottom: `1px solid ${C.border}` }}>
-                    🏢 {sub.label}
-                  </div>
-                  {sub.customers.map(c => {
-                    const entry = entryMap[c.id];
-                    const brand = brands.find(b => b.id === c.brand_id);
-                    const room = roomNum(c.code);
-                    const ttsText = `${group.area?.name || ""} - ${sub.sg?.name || ""} - ${room || c.name}`;
-                    return (
-                      <div key={c.id} style={{
-                        display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
-                        borderBottom: `1px solid ${C.border}`, background: entry ? "#f0fff4" : C.white,
-                      }}>
-                        <div style={S.avatar(48)}>{room || getInitials(c.name)}</div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ fontWeight: 800, fontSize: 16 }}>{c.name}</span>
-                            <button style={{ background: "none", border: "none", cursor: "pointer", fontSize: 17, padding: "0 2px" }}
-                              onClick={() => speak(ttsText)} title="Speak location">🔊</button>
-                          </div>
-                          <div style={{ fontSize: 13, color: C.muted }}>{brand?.name || "No brand"} · Default: {c.default_qty}L</div>
-                          {entry && <div style={{ fontSize: 13, color: C.success, fontWeight: 600 }}>✅ {entry.quantity}L recorded</div>}
-                        </div>
-                        <FatherQtyControl defaultQty={c.default_qty || 1} savedQty={entry?.quantity} onSave={qty => saveEntry(c, qty)} />
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-              <div style={{ borderRadius: "0 0 10px 10px", height: 3, background: C.navy, opacity: 0.12 }} />
-            </div>
-          ))
-        )}
-      </div>
-      {toast}
-    </div>
-  );
-}
-
-function FatherQtyControl({ defaultQty, savedQty, onSave }) {
-  const [qty, setQty] = useState(savedQty ?? defaultQty);
-  const [dirty, setDirty] = useState(false);
-  function adjust(d) { setQty(q => Math.max(0, +(q + d).toFixed(1))); setDirty(true); }
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-      <button style={{ ...S.btn(C.navy), width: 44, height: 44, justifyContent: "center", fontSize: 22, padding: 0, borderRadius: "50%" }} onClick={() => adjust(0.5)}>+</button>
-      <div style={{ fontWeight: 800, fontSize: 16 }}>{qty}L</div>
-      <button style={{ ...S.btn(C.border, C.text), width: 44, height: 44, justifyContent: "center", fontSize: 22, padding: 0, borderRadius: "50%" }} onClick={() => adjust(-0.5)}>−</button>
-      {dirty && <button style={{ ...S.btnSm(C.success), marginTop: 4, padding: "7px 16px", fontSize: 13 }} onClick={() => { onSave(qty); setDirty(false); }}>Save</button>}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// CUSTOMER PORTAL (/c/:code)
-// ═══════════════════════════════════════════════════════════════════════════════
-function CustomerPortal({ code }) {
-  const [customer, setCustomer] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState("home");
-  const [show, toast] = useToast();
-
-  useEffect(() => {
-    DB.getCustomerByCode(code).then(c => { setCustomer(c); setLoading(false); }).catch(() => setLoading(false));
-  }, [code]);
-
-  if (loading) return <div style={{ textAlign: "center", padding: 60 }}>Loading...</div>;
-  if (!customer) return (
-    <div style={{ textAlign: "center", padding: 60 }}>
-      <div style={{ fontSize: 40, marginBottom: 12 }}>😕</div>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Customer not found</div>
-      <div style={{ fontSize: 13, color: C.muted }}>Make sure you have the correct link.<br />Your link: {BASE_URL}/c/YOUR_CODE</div>
-    </div>
-  );
-
-  const tabs = [{ id: "home", label: "🏠" }, { id: "entries", label: "📋" }, { id: "bill", label: "🧾" }, { id: "pay", label: "💳" }];
-
-  return (
-    <div style={S.page}>
-      <div style={S.header}>
-        <img src={logo_app} alt="Logo" style={{ width: 32, height: 32, borderRadius: 6 }} />
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>Hi, {customer.name}! 👋</div>
-          <div style={{ fontSize: 11, opacity: 0.7 }}>Saikrishna Milk Supply</div>
-        </div>
-      </div>
-      <div style={{ display: "flex", borderBottom: `2px solid ${C.border}`, background: C.white }}>
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} style={{
-            flex: 1, padding: "12px 4px", border: "none", background: "none", cursor: "pointer",
-            fontSize: 20, borderBottom: tab === t.id ? `3px solid ${C.navy}` : "3px solid transparent",
-          }}>{t.label}</button>
-        ))}
-      </div>
-      <div style={{ padding: 16 }}>
-        {tab === "home" && <CustomerHome customer={customer} />}
-        {tab === "entries" && <CustomerEntries customer={customer} show={show} />}
-        {tab === "bill" && <CustomerBill customer={customer} show={show} setTab={setTab} />}
-        {tab === "pay" && <CustomerPay customer={customer} show={show} />}
-      </div>
-      {toast}
-    </div>
-  );
-}
-
-function CustomerHome({ customer }) {
-  return (
-    <div>
-      <div style={S.card}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={S.avatar(56)}>{roomNum(customer.code) || getInitials(customer.name)}</div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 18 }}>{customer.name}</div>
-            <div style={{ fontSize: 13, color: C.muted }}>Room {roomNum(customer.code) || customer.code}</div>
-            <div style={{ fontSize: 13, color: C.muted }}>{customer.phone}</div>
-          </div>
-        </div>
-      </div>
-      {customer.outstanding > 0 && (
-        <div style={{ ...S.card, background: "#fff5f5", border: `1px solid ${C.danger}` }}>
-          <div style={{ fontWeight: 700, color: C.danger }}>⚠️ Outstanding Balance</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: C.danger }}>₹{customer.outstanding}</div>
-          <div style={{ fontSize: 12, color: C.muted }}>Please clear at earliest</div>
-        </div>
-      )}
-      <div style={{ ...S.card, background: "#f0f4ff" }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>📱 How to use this portal</div>
-        <div style={{ fontSize: 13, lineHeight: 1.7 }}>
-          • <strong>Entries</strong> — View your daily milk delivery records<br />
-          • <strong>Bill</strong> — View your monthly bill<br />
-          • <strong>Pay</strong> — Record payment and share screenshot
+        <div style={{background:"white",border:"1px solid #eee",borderRadius:14,padding:"16px 18px"}}>
+          <div style={{fontWeight:600,fontSize:14,marginBottom:10}}>🔗 Test Customer Portal</div>
+          <input style={{...S.formInput,marginBottom:8}} value={portalCode} onChange={e=>setPortalCode(e.target.value)} placeholder="Enter customer code e.g. C504"/>
+          <button style={{...S.btnSave,width:"100%",padding:10}} onClick={()=>{if(portalCode.trim())window.location.href=`/c/${portalCode.trim()}`;}}>Open Portal</button>
         </div>
       </div>
     </div>
   );
 }
 
-function CustomerEntries({ customer, show }) {
-  const [entries, setEntries] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const now = new Date();
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
+const S = {
+  screen:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"},
+  appHeader:{background:"white",borderBottom:"1px solid #eee",padding:"12px 16px",display:"flex",alignItems:"center",gap:10,fontWeight:600,fontSize:16,flexShrink:0},
+  sectionTitle:{fontSize:15,fontWeight:600,color:"#111",marginBottom:12},
+  pinWrap:{display:"flex",flexDirection:"column",alignItems:"center",padding:"32px 24px",gap:14},
+  pinTitle:{fontSize:18,fontWeight:700,color:"#1a6b3c",textAlign:"center"},
+  pinDots:{display:"flex",gap:14},
+  pinDot:{width:18,height:18,borderRadius:"50%",border:"2px solid #1a6b3c",transition:"background 0.15s"},
+  pinDotFilled:{background:"#1a6b3c"},
+  pinPad:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,width:"100%",maxWidth:280},
+  pinBtn:{background:"#f5f5f5",border:"0.5px solid #ddd",borderRadius:12,padding:"18px 0",fontSize:26,fontWeight:500,color:"#111",cursor:"pointer",textAlign:"center"},
+  statusBar:{display:"flex",gap:6,padding:"8px 10px",background:"#f8f9fa",borderBottom:"0.5px solid #eee"},
+  searchBar:{display:"flex",alignItems:"center",gap:8,background:"#f5f5f5",border:"0.5px solid #ddd",borderRadius:24,padding:"8px 14px",margin:"8px 12px 4px"},
+  searchInput:{flex:1,background:"none",border:"none",outline:"none",fontSize:15,color:"#111"},
+  clearBtn:{background:"none",border:"none",color:"#888",fontSize:14,cursor:"pointer"},
+  filterRow:{display:"flex",gap:8,padding:"0 12px 8px",overflowX:"auto",scrollbarWidth:"none"},
+  filterChip:{whiteSpace:"nowrap",padding:"5px 12px",borderRadius:16,fontSize:12,cursor:"pointer",border:"0.5px solid #ddd",color:"#666",background:"white"},
+  filterChipActive:{background:"#e8f5ee",color:"#1a6b3c",borderColor:"#1a6b3c"},
+  scrollArea:{flex:1,overflowY:"auto",padding:"8px 12px",display:"flex",flexDirection:"column",gap:8},
+  custCard:{background:"white",border:"0.5px solid #eee",borderRadius:12,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"},
+  custCardDone:{borderLeft:"3px solid #28a745"},
+  custInfo:{flex:1,minWidth:0},
+  custName:{fontSize:15,fontWeight:500,color:"#111",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},
+  custMeta:{fontSize:12,color:"#888",marginTop:2},
+  qtySection:{display:"flex",flexDirection:"column",alignItems:"center",gap:4},
+  qtyNum:{fontSize:22,fontWeight:600,color:"#1a6b3c",lineHeight:1},
+  qtyUnit:{fontSize:11,color:"#888"},
+  qtyBadge:{fontSize:10,padding:"2px 7px",borderRadius:10},
+  qtyBadgeDone:{background:"#d4edda",color:"#155724"},
+  qtyBadgePrev:{background:"#fff3cd",color:"#856404"},
+  submitBtn:{margin:12,background:"#1a6b3c",border:"none",borderRadius:12,padding:16,fontSize:15,fontWeight:500,color:"white",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10},
+  submitBtnDisabled:{background:"#a8d5b8"},
+  modalBg:{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"flex-end",zIndex:100},
+  modal:{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 16px 32px",width:"100%",maxHeight:"92vh",overflowY:"auto"},
+  modalHandle:{width:40,height:4,background:"#ddd",borderRadius:2,margin:"0 auto 16px"},
+  modalName:{fontSize:20,fontWeight:600,color:"#111",marginBottom:4},
+  modalMeta:{fontSize:13,color:"#888",marginBottom:14},
+  prevBox:{background:"#e8f5ee",borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"},
+  qtyGrid:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14},
+  qtyOption:{background:"#f5f5f5",border:"2px solid #eee",borderRadius:12,padding:"12px 0",textAlign:"center",cursor:"pointer",fontSize:18,fontWeight:500,color:"#111"},
+  qtyOptionSel:{background:"#e8f5ee",borderColor:"#1a6b3c",color:"#1a6b3c"},
+  modalActions:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10},
+  btnCancel:{background:"#f5f5f5",border:"0.5px solid #ddd",borderRadius:12,padding:14,fontSize:15,color:"#666",cursor:"pointer",textAlign:"center"},
+  btnSave:{background:"#1a6b3c",border:"none",borderRadius:12,padding:14,fontSize:15,fontWeight:500,color:"white",cursor:"pointer",textAlign:"center"},
+  successScreen:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,gap:12,textAlign:"center"},
+  statBox:{background:"#e8f5ee",borderRadius:12,padding:"12px 16px",textAlign:"center"},
+  statBoxNum:{fontSize:26,fontWeight:700,color:"#1a6b3c"},
+  statBoxLabel:{fontSize:12,color:"#2d7a50"},
+  statsGrid:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16},
+  statCard:{background:"#f8f9fa",borderRadius:12,padding:"14px 12px",textAlign:"center"},
+  alertBox:{background:"#fff3cd",border:"1px solid #ffc107",borderRadius:10,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,marginBottom:12},
+  listCard:{background:"white",border:"0.5px solid #eee",borderRadius:10,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,marginBottom:8},
+  formLabel:{display:"block",fontSize:12,color:"#888",marginBottom:4,fontWeight:500},
+  formInput:{width:"100%",padding:"10px 14px",border:"0.5px solid #ddd",borderRadius:10,fontSize:15,background:"white",color:"#111",marginBottom:12,display:"block",boxSizing:"border-box"},
+  btnPrimary:{background:"#1a6b3c",border:"none",borderRadius:10,padding:"10px 16px",fontSize:13,fontWeight:500,color:"white",cursor:"pointer"},
+  statusBadge:{fontSize:11,padding:"2px 8px",borderRadius:10,display:"inline-block",marginTop:4},
+  badgePaid:{background:"#d4edda",color:"#155724",fontSize:11,padding:"2px 8px",borderRadius:10},
+  badgePending:{background:"#fff3cd",color:"#856404",fontSize:11,padding:"2px 8px",borderRadius:10},
+  badgeRejected:{background:"#f8d7da",color:"#721c24",fontSize:11,padding:"2px 8px",borderRadius:10},
+  bottomNav:{display:"flex",borderTop:"0.5px solid #eee",background:"white",flexShrink:0},
+  navBtn:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 0",background:"none",border:"none",cursor:"pointer",color:"#888",fontSize:12},
+  navBtnActive:{color:"#1a6b3c",borderTop:"2px solid #1a6b3c"},
+  navBtnActiveBlue:{color:"#1565C0",borderTop:"2px solid #1565C0"},
+};
 
-  useEffect(() => {
-    setLoading(true);
-    DB.getMonthEntries(customer.id, month, year).then(e => { setEntries(e); setLoading(false); }).catch(() => { show("Failed", "error"); setLoading(false); });
-  }, [month, year]);
-
-  const total = entries.reduce((s, e) => s + e.quantity, 0);
-  const amount = entries.reduce((s, e) => s + e.amount, 0);
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <select style={{ ...S.input, width: "auto" }} value={month} onChange={e => setMonth(+e.target.value)}>
-          {Array.from({ length: 12 }, (_, i) => <option key={i + 1} value={i + 1}>{new Date(2000, i).toLocaleString("en-IN", { month: "long" })}</option>)}
-        </select>
-        <select style={{ ...S.input, width: "auto" }} value={year} onChange={e => setYear(+e.target.value)}>
-          {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
-        </select>
-      </div>
-      {loading ? <div style={{ textAlign: "center", padding: 40 }}>Loading...</div> : (
-        <>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <div style={{ ...S.card, flex: 1, textAlign: "center", marginBottom: 0 }}>
-              <div style={{ fontSize: 20, fontWeight: 800, color: C.navy }}>{total}L</div>
-              <div style={{ fontSize: 11, color: C.muted }}>Total Milk</div>
-            </div>
-            <div style={{ ...S.card, flex: 1, textAlign: "center", marginBottom: 0 }}>
-              <div style={{ fontSize: 20, fontWeight: 800, color: C.success }}>₹{amount}</div>
-              <div style={{ fontSize: 11, color: C.muted }}>Month Amount</div>
-            </div>
-          </div>
-          {entries.length === 0
-            ? <div style={{ ...S.card, textAlign: "center", color: C.muted }}>No entries for this month</div>
-            : entries.map(e => (
-              <div key={e.id} style={{ ...S.card, display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 13 }}>{fmtDate(e.entry_date)}</span>
-                <div style={{ display: "flex", gap: 12 }}>
-                  <span style={{ fontWeight: 600 }}>{e.quantity}L</span>
-                  <span style={{ color: C.success }}>₹{e.amount}</span>
-                </div>
-              </div>
-            ))}
-        </>
-      )}
-    </div>
-  );
-}
-
-function CustomerBill({ customer, show, setTab }) {
-  const [bills, setBills] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    DB.getBills(customer.id).then(b => { setBills(b); setLoading(false); }).catch(() => { show("Failed", "error"); setLoading(false); });
-  }, []);
-
-  if (loading) return <div style={{ textAlign: "center", padding: 40 }}>Loading...</div>;
-  const latest = bills[0];
-
-  return (
-    <div>
-      {!latest ? (
-        <div style={{ ...S.card, textAlign: "center", color: C.muted, padding: 40 }}>No bills generated yet.</div>
-      ) : (
-        <div style={S.card}>
-          <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 12 }}>🧾 {fmtMonth(latest.month, latest.year)}</div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><span style={{ color: C.muted }}>Milk Supplied</span><span style={{ fontWeight: 700 }}>{latest.total_litres} Litres</span></div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><span style={{ color: C.muted }}>Month Amount</span><span style={{ fontWeight: 700 }}>₹{latest.month_amount}</span></div>
-          {latest.outstanding > 0 && <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><span style={{ color: C.muted }}>Previous Outstanding</span><span style={{ fontWeight: 700, color: C.danger }}>₹{latest.outstanding}</span></div>}
-          <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 8, marginTop: 8, display: "flex", justifyContent: "space-between" }}>
-            <span style={{ fontWeight: 800 }}>Total Due</span>
-            <span style={{ fontWeight: 800, fontSize: 20, color: C.danger }}>₹{latest.total_amount}</span>
-          </div>
-          <div style={{ marginTop: 12, background: "#fff8ed", borderRadius: 8, padding: 10, fontSize: 13 }}>
-            <strong>📌 Payment Note</strong><br />
-            Pay via UPI: <strong>{UPI_ID}</strong><br />
-            After paying, go to Pay tab and share your screenshot.
-          </div>
-          <button style={{ ...S.btn(C.navy), width: "100%", justifyContent: "center", marginTop: 12 }} onClick={() => setTab("pay")}>
-            💳 Go to Pay
-          </button>
-        </div>
-      )}
-      {bills.length > 1 && (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Previous Bills</div>
-          {bills.slice(1).map(b => (
-            <div key={b.id} style={{ ...S.card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>{fmtMonth(b.month, b.year)}</span>
-              <span style={{ fontWeight: 700 }}>₹{b.total_amount}</span>
-              <span style={S.badge(b.status === "paid" ? C.success : C.warning)}>{b.status}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CustomerPay({ customer, show }) {
-  const [form, setForm] = useState({ amount: "", txn_ref: "", notes: "" });
-  const [loading, setLoading] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-
-  async function submit() {
-    if (!form.amount) { show("Enter amount", "error"); return; }
-    setLoading(true);
-    try {
-      await DB.addPayment({
-        customer_id: customer.id, amount: parseFloat(form.amount),
-        payment_method: "upi", payment_date: today(),
-        transaction_ref: form.txn_ref, notes: form.notes, status: "pending",
-      });
-      setSubmitted(true); show("Payment recorded!", "success");
-    } catch (e) { show("Error: " + e.message, "error"); }
-    setLoading(false);
-  }
-
-  if (submitted) return (
-    <div style={{ ...S.card, textAlign: "center", padding: 32 }}>
-      <div style={{ fontSize: 48 }}>✅</div>
-      <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>Payment Recorded!</div>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Share your payment screenshot on WhatsApp to confirm.</div>
-      <a href={`https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(`Payment confirmation from ${customer.name} (${customer.code}) - ₹${form.amount}`)}`} target="_blank" rel="noreferrer">
-        <button style={{ ...S.btn(C.success), width: "100%", justifyContent: "center" }}>📲 Share Screenshot on WhatsApp</button>
-      </a>
-    </div>
-  );
-
-  return (
-    <div>
-      <div style={{ ...S.card, background: "#f0fff4" }}>
-        <div style={{ fontWeight: 700, marginBottom: 4 }}>💳 Pay via UPI</div>
-        <div style={{ fontSize: 18, fontWeight: 800, color: C.navy, marginBottom: 4 }}>{UPI_ID}</div>
-        <div style={{ fontSize: 12, color: C.muted }}>Pay first, then fill details below</div>
-      </div>
-      <div style={S.card}>
-        <label style={S.label}>Amount Paid (₹)</label>
-        <input style={{ ...S.input, marginBottom: 12 }} type="number" value={form.amount}
-          onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="Enter amount" />
-        <label style={S.label}>Last 4 digits of Transaction ID</label>
-        <input style={{ ...S.input, marginBottom: 12 }} maxLength={4} value={form.txn_ref}
-          onChange={e => setForm(f => ({ ...f, txn_ref: e.target.value }))} placeholder="e.g. 4821" />
-        <label style={S.label}>Notes (optional)</label>
-        <input style={{ ...S.input, marginBottom: 16 }} value={form.notes}
-          onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Any notes" />
-        <button style={{ ...S.btn(C.navy), width: "100%", justifyContent: "center" }} onClick={submit} disabled={loading}>
-          {loading ? "Submitting..." : "I Have Paid ✅"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// BILL PAGE (/bill/:code)
-// ═══════════════════════════════════════════════════════════════════════════════
-function BillPage({ billNumber }) {
-  const [bill, setBill] = useState(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => { DB.getBillByCode(billNumber).then(b => { setBill(b); setLoading(false); }); }, [billNumber]);
-  if (loading) return <div style={{ textAlign: "center", padding: 60 }}>Loading...</div>;
-  if (!bill) return <div style={{ textAlign: "center", padding: 60 }}>Bill not found</div>;
-  const c = bill.customers;
-  return (
-    <div style={{ ...S.page, maxWidth: 480, margin: "0 auto", padding: 16 }}>
-      <div style={{ textAlign: "center", marginBottom: 20 }}>
-        <img src={logo_app} alt="Logo" style={{ width: 60, height: 60, borderRadius: 12 }} />
-        <div style={{ fontWeight: 800, fontSize: 18, color: C.navy }}>Saikrishna Milk Supply</div>
-        <div style={{ fontSize: 13, color: C.muted }}>Monthly Bill</div>
-      </div>
-      <div style={S.card}>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12 }}>{fmtMonth(bill.month, bill.year)}</div>
-        <div style={{ marginBottom: 6 }}><strong>Customer:</strong> {c?.name}</div>
-        <div style={{ marginBottom: 6 }}><strong>Code:</strong> {c?.code}</div>
-        <div style={{ marginBottom: 8 }}><strong>Bill No:</strong> {bill.bill_number}</div>
-        <hr />
-        <div style={{ display: "flex", justifyContent: "space-between", margin: "8px 0" }}><span>Total Milk</span><strong>{bill.total_litres} Litres</strong></div>
-        <div style={{ display: "flex", justifyContent: "space-between", margin: "8px 0" }}><span>Month Amount</span><strong>₹{bill.month_amount}</strong></div>
-        {bill.outstanding > 0 && <div style={{ display: "flex", justifyContent: "space-between", margin: "8px 0", color: C.danger }}><span>Previous Outstanding</span><strong>₹{bill.outstanding}</strong></div>}
-        <div style={{ display: "flex", justifyContent: "space-between", margin: "12px 0 0", fontWeight: 800, fontSize: 18 }}>
-          <span>Total Due</span><span style={{ color: C.danger }}>₹{bill.total_amount}</span>
-        </div>
-      </div>
-      <div style={{ ...S.card, background: "#fff8ed" }}>
-        <strong>💳 Pay via UPI</strong>
-        <div style={{ fontFamily: "monospace", fontSize: 16, margin: "6px 0" }}>{UPI_ID}</div>
-        <div style={{ fontSize: 12, color: C.muted }}>After payment, visit your portal to confirm.</div>
-        <a href={`${BASE_URL}/c/${c?.code}`}>
-          <button style={{ ...S.btn(C.navy), marginTop: 10, width: "100%", justifyContent: "center" }}>Open My Portal</button>
-        </a>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ROUTER
-// ═══════════════════════════════════════════════════════════════════════════════
 export default function App() {
-  const path = window.location.pathname;
-  if (path === "/owner") return <OwnerPortal />;
-  if (path === "/entry") return <FatherEntry />;
-  if (path.startsWith("/c/")) return <CustomerPortal code={path.replace("/c/", "")} />;
-  if (path.startsWith("/bill/")) return <BillPage billNumber={path.replace("/bill/", "")} />;
-  return <DevScreen />;
+  const [authed,setAuthed]=useState(false); const [ready,setReady]=useState(false);
+  const route=getRoute();
+  useEffect(()=>{loadPins().then(()=>setReady(true));},[]);
+  if(!ready)return<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",flexDirection:"column",gap:12}}><img src={logo_app} style={{width:80,height:80,borderRadius:16,objectFit:"contain"}} alt="logo"/><div style={{fontSize:14,color:"#888"}}>Loading MilkFlow...</div></div>;
+  if(route.role==="customer")return<div style={{maxWidth:480,margin:"0 auto",height:"100vh",display:"flex",flexDirection:"column"}}><CustomerPortal customerCode={route.code}/></div>;
+  if(route.role==="bill")return<div style={{maxWidth:520,margin:"0 auto"}}><BillPage customerCode={route.code}/></div>;
+  if(route.role==="owner"){
+    if(!authed)return<div style={{maxWidth:480,margin:"0 auto"}}><div style={S.appHeader}><img src={logo_app} style={{width:28,height:28,borderRadius:6,objectFit:"contain"}} alt="logo"/> MilkFlow — Owner</div><PinScreen role="owner" onSuccess={()=>setAuthed(true)}/></div>;
+    return<div style={{maxWidth:480,margin:"0 auto",height:"100vh",display:"flex",flexDirection:"column"}}><div style={S.appHeader}><img src={logo_app} style={{width:28,height:28,borderRadius:6,objectFit:"contain"}} alt="logo"/> MilkFlow<button style={{marginLeft:"auto",fontSize:12,color:"#888",background:"none",border:"none",cursor:"pointer"}} onClick={()=>setAuthed(false)}>Logout</button></div><OwnerDashboard/></div>;
+  }
+  if(route.role==="father"){
+    if(!authed)return<div style={{maxWidth:480,margin:"0 auto"}}><div style={{...S.appHeader,background:"#1a6b3c",color:"white"}}><img src={logo_app} style={{width:28,height:28,borderRadius:6,objectFit:"contain",background:"white",padding:2}} alt="logo"/> MilkFlow — Owner's Register</div><PinScreen role="father" onSuccess={()=>setAuthed(true)}/></div>;
+    return<div style={{maxWidth:480,margin:"0 auto",height:"100vh",display:"flex",flexDirection:"column"}}><div style={{...S.appHeader,background:"#1a6b3c",color:"white"}}><img src={logo_app} style={{width:28,height:28,borderRadius:6,objectFit:"contain",background:"white",padding:2}} alt="logo"/> Owner's Register — {new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"short"})}<button style={{marginLeft:"auto",fontSize:12,color:"rgba(255,255,255,0.8)",background:"none",border:"none",cursor:"pointer"}} onClick={()=>setAuthed(false)}>Lock</button></div><FatherScreen/></div>;
+  }
+  return<SelectScreen/>;
 }
