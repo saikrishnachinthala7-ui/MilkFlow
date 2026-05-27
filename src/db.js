@@ -43,7 +43,9 @@ export async function getAreas() {
 }
 export async function addArea(name, delivery_boy_name = "") {
   const res = await db("areas", "POST", { name, delivery_boy_name });
-  return Array.isArray(res) ? res[0] : res;
+  const item = Array.isArray(res) ? res[0] : res;
+  if (!item || !item.id) throw new Error("Group not created — check Supabase permissions");
+  return item;
 }
 export async function updateArea(id, name, delivery_boy_name = "") {
   return await db("areas", "PATCH", { name, delivery_boy_name }, `?id=eq.${id}`);
@@ -59,7 +61,9 @@ export async function getSubgroups(area_id = null) {
 }
 export async function addSubgroup(area_id, name) {
   const res = await db("subgroups", "POST", { area_id, name });
-  return Array.isArray(res) ? res[0] : res;
+  const item = Array.isArray(res) ? res[0] : res;
+  if (!item || !item.id) throw new Error("Subgroup not created — check Supabase permissions");
+  return item;
 }
 export async function updateSubgroup(id, name) {
   return await db("subgroups", "PATCH", { name }, `?id=eq.${id}`);
@@ -94,6 +98,15 @@ export async function deactivateCustomer(id) {
 }
 export async function deleteCustomer(id) {
   return await db("customers", "DELETE", null, `?id=eq.${id}`);
+}
+
+export async function deleteCustomerAllData(id) {
+  // Delete in correct order to avoid FK constraint errors
+  await db("payments", "DELETE", null, `?customer_id=eq.${id}`);
+  await db("daily_entries", "DELETE", null, `?customer_id=eq.${id}`);
+  await db("customer_entries", "DELETE", null, `?customer_id=eq.${id}`);
+  await db("bills", "DELETE", null, `?customer_id=eq.${id}`);
+  await db("customers", "DELETE", null, `?id=eq.${id}`);
 }
 
 // ─── BRANDS ──────────────────────────────────────────────────────────────────

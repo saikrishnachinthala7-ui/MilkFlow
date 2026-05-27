@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { logo_app } from "./logoData.js";
 import {
   db, loadPins, PINS, todayIST, nowDate,
-  getCustomers, addCustomer, updateCustomer, deactivateCustomer, deleteCustomer,
+  getCustomers, addCustomer, updateCustomer, deactivateCustomer, deleteCustomer, deleteCustomerAllData,
   getBrands, addBrand, updateBrand, deleteBrand,
   getTodayEntries, getDailyEntriesForDate, getMonthOwnerEntries, saveEntry, deleteEntry,
   saveCustomerEntry, getMonthCustomerEntries,
@@ -348,20 +348,65 @@ function CustomerManagement(){
 }
 
 function DeleteCustomerModal({customer,onClose,onDone}){
-  const [type,setType]=useState("soft"); const [step,setStep]=useState("confirm"); const [pin,setPin]=useState(""); const [err,setErr]=useState(""); const [doing,setDoing]=useState(false);
-  const doDelete=async()=>{
-    // Compare with hardcoded OWNER_PIN directly — fixes wrong password bug
-    if(pin!=="1234"){setErr("❌ Wrong PIN");setPin("");return;}
+  const [type,setType]=useState("soft"); const [step,setStep]=useState("confirm");
+  const [err,setErr]=useState(""); const [doing,setDoing]=useState(false);
+  const pinRef=useRef(""); const [pinDisplay,setPinDisplay]=useState(0);
+
+  const executeDelete=async(confirmedPin)=>{
+    if(confirmedPin!=="1234"){setErr("❌ Wrong PIN — try again");pinRef.current="";setPinDisplay(0);return;}
     setDoing(true);
-    try{if(type==="soft")await deactivateCustomer(customer.id);else await deleteCustomer(customer.id);onDone();}
-    catch(e){alert("Error: "+e.message);}
-    setDoing(false);
+    try{
+      if(type==="soft") await deactivateCustomer(customer.id);
+      else if(type==="hard") await deleteCustomer(customer.id);
+      else await deleteCustomerAllData(customer.id);
+      onDone();
+    }catch(e){alert("Error: "+e.message);setDoing(false);}
   };
-  const pressPin=d=>{if(pin.length>=4)return;const next=pin+d;setPin(next);setErr("");if(next.length===4)setTimeout(()=>doDelete(),150);};
+
+  const pressPin=d=>{
+    if(pinRef.current.length>=4)return;
+    const next=pinRef.current+d;
+    pinRef.current=next;
+    setPinDisplay(next.length);
+    setErr("");
+    if(next.length===4){
+      const captured=next;
+      setTimeout(()=>executeDelete(captured),150);
+    }
+  };
+  const delPin=()=>{pinRef.current=pinRef.current.slice(0,-1);setPinDisplay(pinRef.current.length);};
+
   return(<div style={S.modalBg} onClick={onClose}><div style={S.modal} onClick={e=>e.stopPropagation()}>
     <div style={S.modalHandle}/><div style={S.modalName}>Remove Customer</div><div style={S.modalMeta}>{customer.name} • {customer.code}</div>
-    {step==="confirm"&&<>{[["soft","😴","Deactivate","History kept, can reactivate","#1a6b3c"],["hard","🗑️","Permanent Delete","Cannot be undone","#c62828"]].map(([v,icon,label,desc,color])=>(<div key={v} style={{border:`2px solid ${type===v?color:"#eee"}`,borderRadius:12,padding:14,marginBottom:10,cursor:"pointer",background:type===v?color+"11":"white"}} onClick={()=>setType(v)}><div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:22}}>{icon}</span><div><div style={{fontWeight:600,fontSize:14,color}}>{label}</div><div style={{fontSize:12,color:"#888"}}>{desc}</div></div></div></div>))}<div style={S.modalActions}><button style={S.btnCancel} onClick={onClose}>Cancel</button><button style={{...S.btnSave,background:type==="hard"?"#c62828":"#1a6b3c"}} onClick={()=>setStep("pin")}>Continue →</button></div></>}
-    {step==="pin"&&<><div style={{background:"#fff3cd",borderRadius:10,padding:12,marginBottom:14,fontSize:13,color:"#856404"}}>Enter Owner PIN to confirm</div><div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:14}}>{[0,1,2,3].map(i=><div key={i} style={{width:18,height:18,borderRadius:"50%",border:"2px solid #1a6b3c",background:i<pin.length?"#1a6b3c":"white"}}/>)}</div>{err&&<div style={{color:"#c62828",fontSize:13,textAlign:"center",marginBottom:8}}>{err}</div>}<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,maxWidth:240,margin:"0 auto"}}>{[1,2,3,4,5,6,7,8,9].map(n=><button key={n} style={S.pinBtn} onClick={()=>pressPin(String(n))}>{n}</button>)}<div/><button style={S.pinBtn} onClick={()=>pressPin("0")}>0</button><button style={S.pinBtn} onClick={()=>setPin(p=>p.slice(0,-1))}>⌫</button></div>{doing&&<div style={{textAlign:"center",marginTop:12,color:"#888"}}>Processing...</div>}<button style={{...S.btnCancel,width:"100%",marginTop:14}} onClick={()=>{setStep("confirm");setPin("");setErr("");}}>← Back</button></>}
+    {step==="confirm"&&<>
+      {[
+        ["soft","😴","Deactivate (Safe)","History kept, can reactivate anytime","#1a6b3c"],
+        ["hard","🗑️","Delete Customer Only","Removes customer but keeps bills/entries","#e65100"],
+        ["all","💥","Delete Everything","Removes customer + all bills, entries, payments","#c62828"],
+      ].map(([v,icon,label,desc,color])=>(
+        <div key={v} style={{border:`2px solid ${type===v?color:"#eee"}`,borderRadius:12,padding:14,marginBottom:10,cursor:"pointer",background:type===v?color+"11":"white"}} onClick={()=>setType(v)}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>{icon}</span>
+            <div><div style={{fontWeight:600,fontSize:14,color}}>{label}</div><div style={{fontSize:12,color:"#888"}}>{desc}</div></div>
+          </div>
+        </div>
+      ))}
+      <div style={S.modalActions}><button style={S.btnCancel} onClick={onClose}>Cancel</button><button style={{...S.btnSave,background:type==="all"?"#c62828":type==="hard"?"#e65100":"#1a6b3c"}} onClick={()=>{pinRef.current="";setPinDisplay(0);setErr("");setStep("pin");}}>Continue →</button></div>
+    </>}
+    {step==="pin"&&<>
+      <div style={{background:"#fff3cd",borderRadius:10,padding:12,marginBottom:14,fontSize:13,color:"#856404"}}>Enter Owner PIN to confirm</div>
+      <div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:14}}>
+        {[0,1,2,3].map(i=><div key={i} style={{width:18,height:18,borderRadius:"50%",border:"2px solid #1a6b3c",background:i<pinDisplay?"#1a6b3c":"white"}}/>)}
+      </div>
+      {err&&<div style={{color:"#c62828",fontSize:13,textAlign:"center",marginBottom:8}}>{err}</div>}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,maxWidth:240,margin:"0 auto"}}>
+        {[1,2,3,4,5,6,7,8,9].map(n=><button key={n} style={S.pinBtn} onClick={()=>pressPin(String(n))}>{n}</button>)}
+        <div/><button style={S.pinBtn} onClick={()=>pressPin("0")}>0</button>
+        <button style={S.pinBtn} onClick={delPin}>⌫</button>
+      </div>
+      {doing&&<div style={{textAlign:"center",marginTop:12,color:"#888"}}>Processing...</div>}
+      <button style={{...S.btnCancel,width:"100%",marginTop:14}} onClick={()=>{setStep("confirm");pinRef.current="";setPinDisplay(0);setErr("");}}>← Back</button>
+    </>}
   </div></div>);
 }
 
@@ -646,10 +691,10 @@ function GroupsManager(){
     {areas.map(area=>{const areaSgs=subgroups.filter(sg=>sg.area_id===area.id);return(<div key={area.id} style={{marginBottom:10}}>
       <div style={{background:"#1a2744",color:"white",padding:"8px 12px",borderRadius:"8px 8px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <span style={{fontWeight:700}}>📍 {area.name}{area.delivery_boy_name?" / "+area.delivery_boy_name:""}</span>
-        <div style={{display:"flex",gap:6}}><button style={{background:"#d4a843",border:"none",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer",color:"#1a2744",fontWeight:600}} onClick={()=>setEditGroup({...area})}>✏️</button><button style={{background:"#dc2626",border:"none",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer",color:"white"}} onClick={async()=>{if(!confirm("Delete group and all its subgroups?"))return;await deleteArea(area.id);load();}}>🗑</button></div>
+        <div style={{display:"flex",gap:6}}><button style={{background:"#d4a843",border:"none",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer",color:"#1a2744",fontWeight:600}} onClick={()=>setEditGroup({...area})}>✏️</button><button style={{background:"#dc2626",border:"none",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer",color:"white"}} onClick={async()=>{if(!confirm("Delete group and all its subgroups?"))return;try{await deleteArea(area.id);load();}catch(e){alert("Delete failed: "+e.message);}}}>🗑</button></div>
       </div>
       <div style={{border:"0.5px solid #eee",borderTop:"none",borderRadius:"0 0 8px 8px"}}>
-        {areaSgs.length===0?<div style={{padding:"10px 12px",fontSize:13,color:"#888"}}>No subgroups yet. Add one above.</div>:areaSgs.map(sg=>(<div key={sg.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",borderBottom:"0.5px solid #f5f5f5"}}><span style={{fontSize:13}}>🏢 {sg.name}</span><div style={{display:"flex",gap:6}}><button style={{background:"#e8f0ff",border:"0.5px solid #c5d5f5",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#1565C0"}} onClick={()=>setEditSg({...sg})}>✏️</button><button style={{background:"#fdf2f3",border:"0.5px solid #f5c6cb",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#c62828"}} onClick={async()=>{if(!confirm("Delete subgroup?"))return;await deleteSubgroup(sg.id);load();}}>🗑</button></div></div>))}
+        {areaSgs.length===0?<div style={{padding:"10px 12px",fontSize:13,color:"#888"}}>No subgroups yet. Add one above.</div>:areaSgs.map(sg=>(<div key={sg.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",borderBottom:"0.5px solid #f5f5f5"}}><span style={{fontSize:13}}>🏢 {sg.name}</span><div style={{display:"flex",gap:6}}><button style={{background:"#e8f0ff",border:"0.5px solid #c5d5f5",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#1565C0"}} onClick={()=>setEditSg({...sg})}>✏️</button><button style={{background:"#fdf2f3",border:"0.5px solid #f5c6cb",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#c62828"}} onClick={async()=>{if(!confirm("Delete subgroup?"))return;try{await deleteSubgroup(sg.id);load();}catch(e){alert("Delete failed: "+e.message);}}}>🗑</button></div></div>))}
       </div>
     </div>);})}
     {editGroup&&(<div style={S.modalBg} onClick={()=>setEditGroup(null)}><div style={S.modal} onClick={e=>e.stopPropagation()}><div style={S.modalHandle}/><div style={S.modalName}>✏️ Edit Group</div><input style={S.formInput} value={editGroup.name} onChange={e=>setEditGroup(g=>({...g,name:e.target.value}))}/><input style={S.formInput} value={editGroup.delivery_boy_name||""} onChange={e=>setEditGroup(g=>({...g,delivery_boy_name:e.target.value}))} placeholder="Delivery boy name"/><div style={S.modalActions}><button style={S.btnCancel} onClick={()=>setEditGroup(null)}>Cancel</button><button style={S.btnSave} onClick={async()=>{await updateArea(editGroup.id,editGroup.name,editGroup.delivery_boy_name);setEditGroup(null);load();}}>Save</button></div></div></div>)}
