@@ -16,14 +16,17 @@ export async function db(table, method = "GET", body = null, query = "") {
     apikey: SUPABASE_KEY,
     Authorization: `Bearer ${SUPABASE_KEY}`,
     "Content-Type": "application/json",
+    "Prefer": "return=representation",
   };
-  if (method === "POST") headers["Prefer"] = "return=representation";
-  if (method === "PATCH") headers["Prefer"] = "return=representation";
   const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : null });
-  if (!res.ok) { const err = await res.text(); throw new Error(err); }
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`DB error (${res.status}): ${err}`);
+  }
   if (method === "DELETE") return null;
   const text = await res.text();
-  return text ? JSON.parse(text) : null;
+  if (!text || text.trim() === "") return null;
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 export let PINS = { owner: "1234", father: "0000" };
@@ -62,7 +65,15 @@ export async function getSubgroups(area_id = null) {
 export async function addSubgroup(area_id, name) {
   const res = await db("subgroups", "POST", { area_id, name });
   const item = Array.isArray(res) ? res[0] : res;
-  if (!item || !item.id) throw new Error("Subgroup not created — check Supabase permissions");
+  // If Supabase returns null/empty but no error, do a GET to confirm creation
+  if (!item || !item.id) {
+    const check = await db("subgroups", "GET", null,
+      `?area_id=eq.${area_id}&name=eq.${encodeURIComponent(name)}&limit=1`
+    );
+    const found = Array.isArray(check) ? check[0] : check;
+    if (found && found.id) return found;
+    throw new Error("Subgroup not saved. Check Supabase permissions for subgroups table.");
+  }
   return item;
 }
 export async function updateSubgroup(id, name) {

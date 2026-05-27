@@ -686,7 +686,7 @@ function GroupsManager(){
       <div style={{fontWeight:600,marginBottom:10}}>➕ Add Subgroup / Building</div>
       <select style={S.formInput} value={newSg.area_id} onChange={e=>setNewSg(sg=>({...sg,area_id:e.target.value}))}><option value="">-- Select Group first --</option>{areas.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select>
       <input style={S.formInput} placeholder="Subgroup name (e.g. Sumit A Wing)" value={newSg.name} onChange={e=>setNewSg(sg=>({...sg,name:e.target.value}))}/>
-      <button style={S.btnPrimary} onClick={async()=>{if(!newSg.area_id||!newSg.name.trim()){alert("Select group and enter subgroup name");return;}await addSubgroup(newSg.area_id,newSg.name);setNewSg({area_id:"",name:""});load();}}>Add Subgroup</button>
+      <button style={S.btnPrimary} onClick={async()=>{if(!newSg.area_id||!newSg.name.trim()){alert("Select group and enter subgroup name");return;}try{await addSubgroup(newSg.area_id,newSg.name);setNewSg({area_id:"",name:""});load();}catch(e){alert("Failed to add subgroup: "+e.message);}}}>Add Subgroup</button>
     </div>
     {areas.map(area=>{const areaSgs=subgroups.filter(sg=>sg.area_id===area.id);return(<div key={area.id} style={{marginBottom:10}}>
       <div style={{background:"#1a2744",color:"white",padding:"8px 12px",borderRadius:"8px 8px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -768,54 +768,97 @@ function PortalHome({customer,setTab}){
   </div>);
 }
 
-// ─── PORTAL RECORDS — only customer's own entries, backdated ─────────────────
+// ─── PORTAL RECORDS — inline +/- Save like Owner Register ────────────────────
 function PortalRecords({customer}){
   const ist=new Date(new Date().getTime()+(5.5*60*60*1000));
   const [month,setMonth]=useState(ist.getMonth()+1); const [year,setYear]=useState(ist.getFullYear());
   const [custEntries,setCustEntries]=useState([]); const [loading,setLoading]=useState(true);
-  const [showEntry,setShowEntry]=useState(false); const [entryDate,setEntryDate]=useState(todayIST());
-  const [selectedQty,setSelectedQty]=useState(null); const [customQty,setCustomQty]=useState(""); const [saving,setSaving]=useState(false);
+  const [qtys,setQtys]=useState({}); const [saving,setSaving]=useState({});
 
   useEffect(()=>{load();},[month,year]);
-  const load=async()=>{setLoading(true);try{const e=await getMonthCustomerEntries(customer.id,month,year);setCustEntries(e||[]);}catch{}setLoading(false);};
-
-  const custMap={};custEntries.forEach(e=>{custMap[e.entry_date]=e.quantity;});
-  const days=daysInMonth(month,year);
-
-  const doSave=async()=>{
-    let qty;if(selectedQty===-1){qty=parseFloat(customQty);if(isNaN(qty)||qty<0)return;}else if(selectedQty===null)return;else qty=selectedQty;
-    setSaving(true);try{await saveCustomerEntry(customer.id,qty,entryDate);setShowEntry(false);setSelectedQty(null);load();}catch(e){alert("Error: "+e.message);}setSaving(false);
+  const load=async()=>{
+    setLoading(true);
+    try{
+      const e=await getMonthCustomerEntries(customer.id,month,year);
+      setCustEntries(e||[]);
+      const map={};(e||[]).forEach(en=>{map[en.entry_date]={qty:en.quantity,saved:true};});
+      setQtys(map);
+    }catch{}
+    setLoading(false);
   };
+
+  const adjust=(dateStr,delta,defaultQty)=>{
+    setQtys(p=>{
+      const cur=p[dateStr]?.qty??defaultQty;
+      return {...p,[dateStr]:{qty:Math.max(0,+(cur+delta).toFixed(1)),saved:false}};
+    });
+  };
+  const doSave=async(dateStr)=>{
+    const e=qtys[dateStr]; if(!e)return;
+    setSaving(p=>({...p,[dateStr]:true}));
+    try{
+      await saveCustomerEntry(customer.id,e.qty,dateStr);
+      setQtys(p=>({...p,[dateStr]:{qty:e.qty,saved:true}}));
+    }catch(err){alert("Error: "+err.message);}
+    setSaving(p=>({...p,[dateStr]:false}));
+  };
+
+  const days=daysInMonth(month,year);
+  const totalLitres=Object.values(qtys).filter(e=>e.saved).reduce((s,e)=>s+(parseFloat(e.qty)||0),0);
+  const savedCount=Object.values(qtys).filter(e=>e.saved).length;
 
   return(<div style={{padding:16}}>
     <div style={S.sectionTitle}>📋 My Records</div>
-    <div style={{background:"#e8f5ee",borderRadius:10,padding:10,marginBottom:12,fontSize:13,color:"#1a6b3c"}}>📝 You can record your daily milk here. Tap any date to add or edit your record.</div>
+    <div style={{background:"#e8f5ee",borderRadius:10,padding:10,marginBottom:12,fontSize:13,color:"#1a6b3c"}}>📝 You can record your daily milk here. Use +/- to adjust and ✓ to save.</div>
     <div style={{display:"flex",gap:8,marginBottom:12}}>
       <select style={{...S.formInput,flex:1,marginBottom:0}} value={month} onChange={e=>setMonth(+e.target.value)}>{Array.from({length:12},(_,i)=><option key={i+1} value={i+1}>{new Date(2024,i).toLocaleString("en-IN",{month:"long"})}</option>)}</select>
       <select style={{...S.formInput,flex:0.6,marginBottom:0}} value={year} onChange={e=>setYear(+e.target.value)}>{YEARS.map(y=><option key={y}>{y}</option>)}</select>
     </div>
+    {/* Summary strip */}
+    <div style={{display:"flex",gap:10,marginBottom:12}}>
+      <div style={{flex:1,background:"white",border:"0.5px solid #eee",borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
+        <div style={{fontSize:20,fontWeight:700,color:"#1a6b3c"}}>{totalLitres.toFixed(1)}L</div>
+        <div style={{fontSize:11,color:"#888"}}>Total Litres</div>
+      </div>
+      <div style={{flex:1,background:"white",border:"0.5px solid #eee",borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
+        <div style={{fontSize:20,fontWeight:700,color:"#1565C0"}}>{savedCount}/{days}</div>
+        <div style={{fontSize:11,color:"#888"}}>Days Recorded</div>
+      </div>
+    </div>
     {loading?<Loader/>:<div style={{background:"white",border:"0.5px solid #eee",borderRadius:12,overflow:"hidden"}}>
       {Array.from({length:days},(_,i)=>{
-        const d=i+1; const dateStr=`${year}-${String(month).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-        const recorded=custMap[dateStr];
-        const isToday=dateStr===todayIST(); const isFuture=dateStr>todayIST();
-        return(<div key={d} style={{display:"flex",alignItems:"center",padding:"8px 12px",borderBottom:"0.5px solid #f5f5f5",background:isToday?"#f0fff4":"white",opacity:isFuture?0.4:1,cursor:isFuture?"default":"pointer"}} onClick={()=>{if(isFuture)return;setEntryDate(dateStr);setSelectedQty(recorded!==undefined?recorded:null);setCustomQty("");setShowEntry(true);}}>
-          <div style={{width:32,textAlign:"center",fontWeight:isToday?700:400,fontSize:14,color:isToday?"#1a6b3c":"#555"}}>{d}</div>
-          <div style={{width:36,textAlign:"center",fontSize:11,color:"#888"}}>{new Date(dateStr+"T00:00:00").toLocaleDateString("en-IN",{weekday:"short"})}</div>
-          <div style={{flex:1}}>{recorded!==undefined?<span style={{fontSize:13,fontWeight:600,color:parseFloat(recorded)===0?"#c62828":"#1a6b3c"}}>{parseFloat(recorded)===0?"🚫 No milk":recorded+"L"}</span>:<span style={{fontSize:12,color:"#bbb"}}>Not recorded</span>}</div>
-          <div style={{fontSize:12,color:"#1565C0"}}>{!isFuture?"✏️":""}</div>
-        </div>);
+        const d=i+1;
+        const dateStr=`${year}-${String(month).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+        const isFuture=dateStr>todayIST();
+        const isToday=dateStr===todayIST();
+        const entry=qtys[dateStr];
+        const qty=entry?.qty??customer.default_qty??1;
+        const isSaved=entry?.saved===true;
+        const isSaving=saving[dateStr];
+        return(
+          <div key={d} style={{display:"flex",alignItems:"center",padding:"8px 10px",borderBottom:"0.5px solid #f5f5f5",background:isToday?"#f0fff4":isSaved?"#f8fff8":"white",opacity:isFuture?0.35:1}}>
+            {/* Date */}
+            <div style={{width:28,textAlign:"center",fontWeight:isToday?700:400,fontSize:13,color:isToday?"#1a6b3c":"#555",flexShrink:0}}>{d}</div>
+            <div style={{width:30,textAlign:"center",fontSize:10,color:"#aaa",flexShrink:0}}>{new Date(dateStr+"T00:00:00").toLocaleDateString("en-IN",{weekday:"short"})}</div>
+            {/* Status */}
+            <div style={{flex:1,paddingLeft:4}}>
+              {isSaved
+                ? <span style={{fontSize:12,color:parseFloat(qty)===0?"#c62828":"#1a6b3c",fontWeight:600}}>{parseFloat(qty)===0?"🚫 No milk":`✅ ${qty}L`}</span>
+                : <span style={{fontSize:11,color:"#bbb"}}>Not recorded</span>}
+            </div>
+            {/* Controls — hidden for future dates */}
+            {!isFuture&&<div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+              <button style={{width:28,height:28,borderRadius:"50%",background:"#f0f0f0",border:"0.5px solid #ddd",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}} onClick={()=>adjust(dateStr,-0.5,customer.default_qty??1)}>−</button>
+              <span style={{fontWeight:700,fontSize:13,minWidth:30,textAlign:"center"}}>{qty}L</span>
+              <button style={{width:28,height:28,borderRadius:"50%",background:"#1a2744",border:"none",color:"white",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}} onClick={()=>adjust(dateStr,0.5,customer.default_qty??1)}>+</button>
+              <button style={{width:28,height:28,borderRadius:6,background:isSaved?"#d4edda":"#1a6b3c",border:"none",color:isSaved?"#155724":"white",fontSize:12,fontWeight:700,cursor:"pointer",flexShrink:0}} onClick={()=>doSave(dateStr)} disabled={isSaving}>
+                {isSaving?"…":"✓"}
+              </button>
+            </div>}
+          </div>
+        );
       })}
     </div>}
-    {showEntry&&(<div style={S.modalBg} onClick={()=>setShowEntry(false)}><div style={S.modal} onClick={e=>e.stopPropagation()}>
-      <div style={S.modalHandle}/>
-      <div style={S.modalName}>📝 Record Milk</div>
-      <div style={S.modalMeta}>{fmtDateFull(entryDate)}{entryDate!==todayIST()&&<span style={{marginLeft:6,background:"#fff3cd",color:"#856404",padding:"2px 8px",borderRadius:8,fontSize:11}}>Backdated</span>}</div>
-      <div style={S.prevBox}><span style={{fontSize:13,color:"#2d7a50"}}>Your usual:</span><span style={{fontSize:18,fontWeight:600,color:"#1a6b3c"}}>{customer?.default_qty||1}L</span></div>
-      <div style={S.qtyGrid}>{QTY_OPTIONS.map(q=><button key={q} style={{...S.qtyOption,...(selectedQty===q?S.qtyOptionSel:{})}} onClick={()=>{setSelectedQty(q);setCustomQty("");}}>{q}</button>)}<button style={{...S.qtyOption,...(selectedQty===0?S.qtyOptionSel:{}),color:"#c0392b",borderColor:"#f5c6cb",background:"#fdf2f3",fontSize:13}} onClick={()=>{setSelectedQty(0);setCustomQty("");}}>🚫<br/><span style={{fontSize:10}}>None</span></button><button style={{...S.qtyOption,...(selectedQty===-1?S.qtyOptionSel:{}),fontSize:13}} onClick={()=>setSelectedQty(-1)}>✏️<br/><span style={{fontSize:10}}>Other</span></button></div>
-      {selectedQty===-1&&<div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}><input type="number" step="0.5" min="0" placeholder="0.0" value={customQty} onChange={e=>setCustomQty(e.target.value)} style={{flex:1,fontSize:18,padding:"10px 14px",border:"0.5px solid #ddd",borderRadius:10,background:"white",color:"#111"}} autoFocus/><span style={{fontSize:13,color:"#888"}}>Litres</span></div>}
-      <div style={S.modalActions}><button style={S.btnCancel} onClick={()=>setShowEntry(false)}>Cancel</button><button style={S.btnSave} onClick={doSave} disabled={saving||selectedQty===null}>{saving?"Saving...":"✅ Save"}</button></div>
-    </div></div>)}
   </div>);
 }
 
